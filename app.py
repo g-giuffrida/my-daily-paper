@@ -150,7 +150,7 @@ def control(method, label, field, *args, **kwargs):
 def pdf_signature(settings):
     # Invalidate previously cached PDFs when the fitter changes, without touching
     # browser preferences or triggering another generation/API call.
-    return "adaptive-layout-v1:" + json.dumps(settings, sort_keys=True)
+    return "unicode-layout-v2:" + json.dumps(settings, sort_keys=True)
 
 
 st.markdown(

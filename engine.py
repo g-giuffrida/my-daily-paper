@@ -12,7 +12,6 @@ import math
 from pathlib import Path
 import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
 from reportlab.lib import colors
@@ -26,6 +25,7 @@ from reportlab.platypus import Flowable, Image, Paragraph, Table, TableStyle
 
 from layout import allocate, budgets, region_headline_size
 from settings import DEFAULT, FONTS, settings_errors
+from typography import font_markup, printable_text, text_direction
 
 ROOT = Path(__file__).resolve().parent
 
@@ -665,15 +665,16 @@ def paragraph(
 ):
     size = size or settings["body_size"]
     f = font(face or settings["body_font"], bold)
-    # Fail explicitly for unsupported scripts rather than producing missing-glyph squares.
-    available = pdfmetrics.getFont(f).face.charToGlyph
-    if any(ord(ch) not in available for ch in str(text) if not ch.isspace()):
-        raise ValueError(
-            "The selected font cannot display some characters. Choose a supported font or adjust the text."
-        )
+    direction = text_direction((prefix or "") + str(text))
     return Paragraph(
-        ("<b>" + escape(prefix) + "</b> " if prefix else "")
-        + escape(str(text)).replace("\n", "<br/>"),
+        (
+            "<b>"
+            + font_markup(prefix, font(face or settings["body_font"], True))
+            + "</b> "
+            if prefix
+            else ""
+        )
+        + font_markup(text, f),
         ParagraphStyle(
             "text",
             fontName=f,
@@ -684,6 +685,7 @@ def paragraph(
             splitLongWords=True,
             allowWidows=0,
             allowOrphans=0,
+            shaping=bool(direction),
         ),
     )
 
@@ -1190,7 +1192,7 @@ def render_pdf(settings, issue):
     stream = BytesIO()
     c = Canvas(stream, pagesize=A4, pageCompression=1, invariant=1)
     c.setTitle(
-        f"{settings['name']} - {issue['day']}"
+        f"{printable_text(settings['name'])} - {issue['day']}"
         + (" - SAMPLE" if issue.get("sample") else "")
     )
     c.setSubject(

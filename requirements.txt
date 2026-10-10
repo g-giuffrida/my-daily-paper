@@ -1,5 +1,6 @@
 streamlit>=1.45,<2
 openai>=1.90,<4
-reportlab>=4.2,<6
+reportlab[shaping]>=4.4.3,<6
 jsonschema>=4.23,<5
 Pillow>=10,<13
+emoji>=2.14,<3
