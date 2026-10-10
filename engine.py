@@ -808,10 +808,27 @@ def compose_regions(settings, issue):
                             + settings["body_size"] * settings["line_spacing"],
                         )
                         bottom = y - target
+                original_pending = deque(pending)
+                placement_start = len(placements)
                 fill(r, sid, r.x + pad, column_width, y, pending, bottom)
                 fill(
                     r, sid, r.x + pad + column_width + gutter, column_width, y, pending
                 )
+                if pending and bottom is not None:
+                    # Widow/orphan rules can make an estimate too optimistic. Retry
+                    # with full column height before reporting genuine overflow.
+                    del placements[placement_start:]
+                    pending.clear()
+                    pending.extend(original_pending)
+                    fill(r, sid, r.x + pad, column_width, y, pending)
+                    fill(
+                        r,
+                        sid,
+                        r.x + pad + column_width + gutter,
+                        column_width,
+                        y,
+                        pending,
+                    )
             else:
                 fill(r, sid, r.x + pad, width, y, pending)
         if pending:
