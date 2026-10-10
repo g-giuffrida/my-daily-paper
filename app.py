@@ -133,6 +133,11 @@ def apply_preset():
         st.session_state["setting_" + field] = value
 
 
+def use_classic_style():
+    st.session_state.design_preset = "Classic newspaper"
+    apply_preset()
+
+
 def control(method, label, field, *args, **kwargs):
     key = "setting_" + field
     if key not in st.session_state:
@@ -229,6 +234,8 @@ with left:
         st.selectbox(
             "Design preset", list(PRESETS), key="design_preset", on_change=apply_preset
         )
+        st.button("Use classic broadsheet style", on_click=use_classic_style,
+                  help="Blackletter masthead, serif headlines, justified columns and fine black rules. Keeps your content and prompts.")
         control(
             st.selectbox, "Masthead font", "masthead_font", ["UnifrakturCook"] + FONTS
         )

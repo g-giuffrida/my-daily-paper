@@ -32,6 +32,10 @@ A server-held key requires an app password. Keep secrets out of Git. For a priva
 
 Try the sample without an API key. It is prominently labeled illustrative, not current reporting.
 
+For a traditional broadsheet look, select **Design → Use classic broadsheet style**. This updates previously saved design settings without changing your section prompts: a blackletter masthead, ruled date strip, stronger opening headline, justified serif columns and monochrome fine rules.
+
+News citations are checked against URLs returned by OpenAI's search tool and citation annotations. Known tracking parameters and fragments are ignored when matching; the PDF keeps the original verified URL. If a citation is not verified, generation automatically re-researches and repairs the draft up to twice (additional API calls may incur charges). Unsupported links still fail validation; no unrelated source is substituted by application code. This verifies link provenance, not every factual claim independently.
+
 Settings and short summaries from the last thirty generated editions are saved automatically in **this browser’s local storage**. They survive app restarts on the same origin, but do not sync between devices. If storage is disabled or full, the app displays a warning. There are no accounts, no shared profiles, and no calendar connection. Prompts remain as entered until you edit them; update explicitly dated plans for a new week.
 
 Illustrations are generated only for section prompts that request an image, photo, drawing or illustration (including Italian/German equivalents). Charts are drawn as vectors from generated structured data, which the editor is instructed to source or label as user-supplied/illustrative. The renderer rejects invalid data and unsupported font characters rather than printing broken glyphs. The bundled font families support English, Italian, German and other Latin-script languages; other scripts may require additional fonts.

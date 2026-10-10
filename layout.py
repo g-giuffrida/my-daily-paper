@@ -65,6 +65,13 @@ def allocate(settings):
     return result
 
 
+def region_headline_size(settings, region):
+    if (region.section_id == settings["sections"][0]["id"]
+            and not region.continuation and len(region.cells) >= 2):
+        return min(24, settings["headline_size"] + 3)
+    return settings["headline_size"]
+
+
 def budgets(settings):
     """Measured physical area, including heading and inner padding reservations."""
     out = {}
@@ -74,7 +81,7 @@ def budgets(settings):
         # Conservative average character width and words per line; rendering is authoritative.
         lines = max(
             1,
-            int((r.height - 2 * pad - 2.5 * settings["headline_size"] - 20) / leading),
+            int((r.height - 2 * pad - 2.5 * region_headline_size(settings, r) - 20) / leading),
         )
         word_width = 3.6 if settings["body_font"] == "IBM Plex Mono" else 2.7
         words = int(lines * (r.width - 2 * pad) / (settings["body_size"] * word_width))
