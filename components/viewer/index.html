@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}body{margin:0;background:transparent;color:#242424;font:14px system-ui,sans-serif}
+.toolbar{display:flex;gap:10px;margin:0 0 14px;flex-wrap:wrap}
+button{border:1px solid #b9c4c4;background:white;border-radius:6px;padding:9px 12px;cursor:pointer;color:#183c42}
+button.active,button.primary{background:#183c42;color:white;border-color:#183c42}button:disabled{opacity:.5;cursor:wait}
+.sheet{background:white;box-shadow:0 4px 18px #0002;margin:0 auto 18px;width:100%;border:1px solid #d2d2cc}
+canvas{display:block;width:100%;height:auto}#status{font-size:12px;color:#626b6a;margin:10px 0}.print-sheet{display:none}
+@media print{@page{size:A4 portrait;margin:0}body{background:white!important;margin:0!important}.toolbar,#status,#sheets{display:none!important}.print-sheet{display:block;width:210mm;height:297mm;break-after:page;page-break-after:always;overflow:hidden}.print-sheet:last-child{break-after:auto;page-break-after:auto}.print-sheet canvas{width:210mm;height:297mm}}
+</style></head><body>
+<div class="toolbar"><button id="front" class="active">Front</button><button id="back">Back</button><button id="both">Both sides</button><button id="print" class="primary" disabled>Print today’s newspaper</button></div>
+<div id="status" role="status">Loading exact PDF preview…</div><div id="sheets"></div><div id="print-sheets"></div>
+<script type="module">
+import * as pdfjsLib from './pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc=new URL('./pdf.worker.min.mjs',import.meta.url).href;
+const send=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
+let selected='front',signature='',revision=0,doc=null,args={},printReady=false;
+const status=document.getElementById('status'),printButton=document.getElementById('print');
+const height=()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)});
+function select(value){selected=value;['front','back','both'].forEach(id=>document.getElementById(id).classList.toggle('active',id===value));[...document.getElementById('sheets').children].forEach((el,i)=>el.style.display=value==='both'||i===(value==='front'?0:1)?'block':'none');requestAnimationFrame(height)}
+['front','back','both'].forEach(id=>document.getElementById(id).onclick=()=>select(id));
+printButton.onclick=()=>{if(!printReady)return;status.textContent='Print at actual size on A4; select two-sided / flip on long edge. If embedded printing is blocked, download the PDF and print it.';window.focus();window.print();height()};
+window.addEventListener('message',async event=>{
+ if(event.source!==parent||event.data.type!=='streamlit:render')return;
+ args=event.data.args;printButton.textContent=args.sample?'Print sample newspaper':(args.is_today?'Print today’s newspaper':'Print edition '+args.day);
+ if(args.pdf===signature)return;
+ signature=args.pdf;const current=++revision;printReady=false;printButton.disabled=true;status.textContent='Loading exact PDF preview…';
+ try{
+  if(doc)await doc.destroy();
+  const bytes=Uint8Array.from(atob(args.pdf),ch=>ch.charCodeAt(0));
+  const loaded=await pdfjsLib.getDocument({data:bytes,isEvalSupported:false}).promise;
+  if(current!==revision){await loaded.destroy();return}doc=loaded;
+  if(doc.numPages!==2)throw new Error('Expected exactly two pages.');
+  const sheets=document.getElementById('sheets'),prints=document.getElementById('print-sheets');sheets.replaceChildren();prints.replaceChildren();
+  for(let n=1;n<=2;n++){
+   const page=await doc.getPage(n);
+   for(const [container,scale,klass] of [[sheets,1.6,'sheet'],[prints,300/72,'print-sheet']]){
+    const viewport=page.getViewport({scale}),wrapper=document.createElement('div');wrapper.className=klass;
+    const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.setAttribute('aria-label',n===1?'Front newspaper page':'Back newspaper page');wrapper.append(canvas);container.append(wrapper);
+    await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+   }
+  }
+  if(current!==revision)return;printReady=true;printButton.disabled=false;status.textContent=args.sample?'Illustrative sample — not today’s reporting.':'Edition '+args.day+' · exact A4 PDF · two sides';select(selected);
+ }catch(e){status.textContent='Preview unavailable: '+e.message+'. Use the PDF download.';height()}
+});
+new ResizeObserver(()=>requestAnimationFrame(height)).observe(document.getElementById('sheets'));
+send('streamlit:componentReady',{apiVersion:1});height();
+</script></body></html>
