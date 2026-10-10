@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 from collections import deque
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -46,11 +47,22 @@ class CitationError(ValueError):
 def citation_key(url):
     """Ignore fragments and known tracking only, not meaningful query parameters."""
     p = urlparse(url)
-    query = sorted((k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
-                   if not k.lower().startswith("utm_")
-                   and k.lower() not in {"fbclid", "gclid", "msclkid"})
-    return urlunparse((p.scheme.lower(), p.netloc.lower(), p.path or "/",
-                       p.params, urlencode(query), ""))
+    query = sorted(
+        (k, v)
+        for k, v in parse_qsl(p.query, keep_blank_values=True)
+        if not k.lower().startswith("utm_")
+        and k.lower() not in {"fbclid", "gclid", "msclkid"}
+    )
+    return urlunparse(
+        (
+            p.scheme.lower(),
+            p.netloc.lower(),
+            p.path or "/",
+            p.params,
+            urlencode(query),
+            "",
+        )
+    )
 
 
 def edition_day(settings, now=None):
@@ -186,8 +198,11 @@ def validate_issue(issue, settings, day, searched_urls=None):
                 if date.fromisoformat(src["published_at"]) > date.fromisoformat(day):
                     raise ValueError("A source publication date is in the future.")
             if searched_urls is not None and src["url"] not in searched_urls:
-                matches = sorted(u for u in searched_urls
-                                 if citation_key(u) == citation_key(src["url"]))
+                matches = sorted(
+                    u
+                    for u in searched_urls
+                    if citation_key(u) == citation_key(src["url"])
+                )
                 if matches:
                     # Render the original verified link, not a model's URL variant.
                     src["url"] = matches[0]
@@ -265,12 +280,17 @@ def editorial_instructions(settings, day, history):
         f"This edition is dated {day} in {settings['timezone']}. Current week dates: {week_dates(day)}. "
         "Use live web search for news or time-sensitive facts; cite direct URLs returned by search and actual publication dates in YYYY-MM-DD (empty when unknown). "
         "Never invent facts, quotes, prices, chart data, events, source URLs, or dates. Distinguish older reporting, interpretation, and verified current news. "
+        "Use only 1–3 essential sources per news section; do not dump every visited URL into the newspaper. "
         "If there is no verified update, explicitly say so; do not present evergreen content as breaking news. "
         "Each section has hard physical region dimensions and a conservative word budget. Headline, text, tables, sources and images ALL share this space. "
-        "Keep headline to roughly 5–10 words; reduce prose significantly for calendars, tables or graphics. Use short paragraphs and meaningful editorial hierarchy. "
+        "Word budgets are hard maximums, not targets: aim for 65% to leave room for headings and citations. "
+        "Keep headline to roughly 5–8 words; reduce prose significantly for calendars, tables or graphics. Use short paragraphs and meaningful editorial hierarchy. "
+        "For one-space sections, use at most three short paragraphs or four list items, and avoid extra subheadings. "
         "A calendar must have exactly seven ordered days covering the provided week dates. Only include events explicitly supplied in the prompt. "
         "Do not claim earlier events were completed, do not add events or automatically roll explicitly dated events into another week. "
-        "Use concise event labels. Use charts only for supported data, with units and source or a clear user-supplied/illustrative label. "
+        "Calendar sections should contain the calendar without generic introductory or closing filler. "
+        "Use concise event labels preserving all supplied events, names, locations and times. "
+        "Use charts only for supported data, with units and source or a clear user-supplied/illustrative label. "
         "Illustration blocks are allowed ONLY when illustration_allowed is true; limit to one per section, with a concise caption marked AI illustration. "
         "Use plain text, no Markdown or HTML. Return structured blocks, not layout code. "
         f"Writing language: {settings['language']}. Voice: {settings['tone']}. Home region: {settings['region']}. "
@@ -335,21 +355,37 @@ def generate_issue(settings, key, day, history=None, client=None):
                 tools=[{"type": "web_search"}],
                 include=["web_search_call.action.sources"],
                 input=[
-                    {"role": "system", "content": editorial_instructions(settings, day, history or [])},
-                    {"role": "user", "content":
-                        "Repair this edition's unverified citations. Search again to verify the affected claims. "
+                    {
+                        "role": "system",
+                        "content": editorial_instructions(settings, day, history or []),
+                    },
+                    {
+                        "role": "user",
+                        "content": "Repair this edition's unverified citations. Search again to verify the affected claims. "
                         "Copy citation URLs exactly from web search results. Do not merely replace an unsupported "
                         "link with an unrelated allowed URL. Rewrite unsupported reporting to match verified sources; "
                         "if no update is verified, explicitly say so. Preserve unaffected sections, IDs and order. "
-                        "Return the complete edition. Validation error: " + str(error)
-                        + ". Previously verified URLs: " + json.dumps(sorted(searched))
-                        + ". Draft: " + json.dumps(issue, ensure_ascii=False)},
+                        "Return the complete edition. Validation error: "
+                        + str(error)
+                        + ". Previously verified URLs: "
+                        + json.dumps(sorted(searched))
+                        + ". Draft: "
+                        + json.dumps(issue, ensure_ascii=False),
+                    },
                 ],
-                text={"format": {"type": "json_schema", "name": "daily_newspaper",
-                                 "strict": True, "schema": SCHEMA}},
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "daily_newspaper",
+                        "strict": True,
+                        "schema": SCHEMA,
+                    }
+                },
             )
             if not repair.output_text:
-                raise CitationError("Source repair returned no content. Try another text model.")
+                raise CitationError(
+                    "Source repair returned no content. Try another text model."
+                )
             searched.update(collect_source_urls(repair))
             issue = json.loads(repair.output_text)
     issue.update(day=day, timezone=settings["timezone"], sample=False)
@@ -390,7 +426,11 @@ def generate_issue(settings, key, day, history=None, client=None):
                         "role": "user",
                         "content": "Shorten only sections with these IDs: "
                         + json.dumps(overflow_ids)
-                        + ". Reduce text by at least 40%. Preserve the exact sources, factual meaning, calendar events, illustration blocks and block order. Return all sections. Existing issue: "
+                        + ". Rewrite the headline in at most 6 words and reduce prose by at least 60%, "
+                        "preserving facts and source attribution. Use the shortest useful wording. "
+                        "Preserve sources and all calendar, table, chart and illustration blocks; the application "
+                        "will keep those original data blocks regardless of your response. No calendar filler prose. "
+                        "Return all sections. Existing issue: "
                         + json.dumps(
                             {"sections": issue["sections"]}, ensure_ascii=False
                         ),
@@ -406,25 +446,50 @@ def generate_issue(settings, key, day, history=None, client=None):
                 },
             )
             revised = json.loads(repair.output_text)
-            validate_issue(revised, settings, day, searched)
+            # Validate shape first. Never let a shortening call replace verified
+            # sources or event/data/image payloads (or fail solely for trying to).
+            import jsonschema
+
+            jsonschema.validate(revised, SCHEMA)
             by_id = {s["id"]: s for s in revised["sections"]}
             for i, original in enumerate(issue["sections"]):
                 if original["id"] in overflow_ids:
-                    replacement = by_id[original["id"]]
-                    if replacement["sources"] != original["sources"]:
-                        raise ValueError(
-                            "The shorter revision changed source citations. Regenerate this edition."
-                        )
-                    protected = lambda s: [
-                        (j, b)
-                        for j, b in enumerate(s["blocks"])
-                        if b["type"] in ("calendar", "chart", "illustration")
-                    ]
-                    if protected(replacement) != protected(original):
-                        raise ValueError(
-                            "The shorter revision changed calendar, chart, or illustration data."
-                        )
+                    proposed = by_id.get(original["id"])
+                    if proposed is None:
+                        continue
+                    immutable = {"calendar", "table", "chart", "illustration"}
+                    prose = deque(
+                        deepcopy(b)
+                        for b in proposed["blocks"]
+                        if b["type"] not in immutable
+                    )
+                    replacement = {
+                        **original,
+                        "headline": proposed["headline"],
+                        "summary": proposed["summary"],
+                        "blocks": [],
+                    }
+                    remapped_images = {}
+                    for old_index, block in enumerate(original["blocks"]):
+                        if block["type"] in immutable:
+                            new_index = len(replacement["blocks"])
+                            replacement["blocks"].append(deepcopy(block))
+                            old_key = f"{original['id']}:{old_index}"
+                            if old_key in issue["images"]:
+                                remapped_images[f"{original['id']}:{new_index}"] = (
+                                    issue["images"][old_key]
+                                )
+                        elif prose:
+                            replacement["blocks"].append(prose.popleft())
+                    replacement["blocks"].extend(prose)
+                    issue["images"] = {
+                        k: v
+                        for k, v in issue["images"].items()
+                        if not k.startswith(original["id"] + ":")
+                    }
+                    issue["images"].update(remapped_images)
                     issue["sections"][i] = replacement
+            validate_issue(issue, settings, day, searched)
 
 
 def demo_issue(settings=None, day=None):
@@ -521,26 +586,47 @@ def demo_issue(settings=None, day=None):
 class Chart(Flowable):
     """Small vector chart with explicit zero baseline, labels, units, and title."""
 
-    def __init__(self, block, width, settings):
+    def __init__(self, block, width, settings, max_height=None):
         super().__init__()
-        self.block, self.width, self.height, self.settings = block, width, 105, settings
+        self.block, self.width, self.settings = block, width, settings
+        self.title = paragraph(
+            block["title"] + (" (" + block["unit"] + ")" if block["unit"] else ""),
+            settings,
+            size=7,
+        )
+        self.title_height = self.title.wrap(width, A4[1])[1]
+        self.x0 = max(
+            28,
+            max(
+                pdfmetrics.stringWidth(f"{v:g}", font(settings["body_font"]), 7)
+                for v in [0, *block["values"]]
+            )
+            + 6,
+        )
+        step = (width - self.x0 - 6) / len(block["values"])
+        self.labels = [paragraph(label, settings, size=6) for label in block["labels"]]
+        self.label_height = max(p.wrap(step - 2, A4[1])[1] for p in self.labels)
+        self.plot_height = min(
+            64,
+            max(24, (max_height or 1000) - self.title_height - self.label_height - 16),
+        )
+        self.height = self.title_height + self.label_height + self.plot_height + 16
 
     def draw(self):
         c, b, s = self.canv, self.block, self.settings
         c.setFillColor(colors.HexColor(s["ink"]))
         c.setFont(font(s["body_font"]), 7)
-        title = paragraph(
-            b["title"] + (" (" + b["unit"] + ")" if b["unit"] else ""), s, size=7
-        )
-        _, th = title.wrap(self.width, 100)
-        if th > 18:
-            raise FitError(["Chart title"])
-        title.drawOn(c, 0, self.height - th)
+        self.title.drawOn(c, 0, self.height - self.title_height)
         values = b["values"]
         lo, hi = min(0, min(values)), max(0, max(values))
         if hi == lo:
             hi = lo + 1
-        x0, y0, plotw, ploth = 28, 20, self.width - 34, 64
+        x0, y0, plotw, ploth = (
+            self.x0,
+            self.label_height + 6,
+            self.width - self.x0 - 6,
+            self.plot_height,
+        )
         y = lambda v: y0 + (v - lo) / (hi - lo) * ploth
         c.setStrokeColor(colors.HexColor(s["rule_color"]))
         c.setLineWidth(0.4)
@@ -565,10 +651,8 @@ class Chart(Flowable):
                 points.append((x, y(value)))
                 c.circle(x, y(value), 2, fill=1, stroke=0)
             # Label wrapping is measured rather than truncated.
-            label_para = paragraph(label, s, size=6)
-            _, lh = label_para.wrap(step - 2, 100)
-            if lh > 18:
-                raise FitError(["Chart labels"])
+            label_para = self.labels[i]
+            lh = label_para.height
             label_para.drawOn(c, x - step / 2, y0 - lh - 2)
         c.setStrokeColor(colors.HexColor(s["accent"]))
         c.setLineWidth(1)
@@ -576,7 +660,9 @@ class Chart(Flowable):
             c.line(*a, *z)
 
 
-def paragraph(text, settings, size=None, bold=False, face=None, color=None, align=0):
+def paragraph(
+    text, settings, size=None, bold=False, face=None, color=None, align=0, prefix=None
+):
     size = size or settings["body_size"]
     f = font(face or settings["body_font"], bold)
     # Fail explicitly for unsupported scripts rather than producing missing-glyph squares.
@@ -586,7 +672,8 @@ def paragraph(text, settings, size=None, bold=False, face=None, color=None, alig
             "The selected font cannot display some characters. Choose a supported font or adjust the text."
         )
     return Paragraph(
-        escape(str(text)).replace("\n", "<br/>"),
+        ("<b>" + escape(prefix) + "</b> " if prefix else "")
+        + escape(str(text)).replace("\n", "<br/>"),
         ParagraphStyle(
             "text",
             fontName=f,
@@ -601,7 +688,7 @@ def paragraph(text, settings, size=None, bold=False, face=None, color=None, alig
     )
 
 
-def block_flowables(block, width, settings, day, image_data=None):
+def block_flowables(block, width, settings, day, image_data=None, max_height=None):
     kind = block["type"]
     if kind == "paragraph":
         return [paragraph(block["text"], settings, align=4)]
@@ -617,29 +704,89 @@ def block_flowables(block, width, settings, day, image_data=None):
         return [heading]
     if kind == "list":
         return [paragraph("• " + item, settings) for item in block["items"]]
-    if kind in ("calendar", "table"):
-        if kind == "calendar":
-            rows = []
-            for d in block["days"]:
-                dt = date.fromisoformat(d["date"])
-                rows.append(
-                    [
-                        paragraph(
-                            dt.strftime("%a %d")
-                            + (" · TODAY" if d["date"] == day else ""),
-                            settings,
-                            size=7,
-                            bold=True,
-                        ),
-                        paragraph("\n".join(d["events"]) or "—", settings, size=8),
-                    ]
+    if kind == "calendar":
+        flows = []
+        size = min(8, settings["body_size"])
+        for d in block["days"]:
+            label = date.fromisoformat(d["date"]).strftime("%a %d")
+            label += " · TODAY" if d["date"] == day else ""
+            events = " · ".join(d["events"]) or "—"
+            if settings.get("_compact_blocks"):
+                flow = paragraph(events, settings, size=size, prefix=label)
+                if d["date"] == day:
+                    flow.style.backColor = colors.HexColor(settings["accent"]).clone(
+                        alpha=0.12
+                    )
+                elif d["date"] < day:
+                    flow.style.textColor = colors.HexColor("#777777")
+                flow._after_space = 2
+            else:
+                label_p = paragraph(label, settings, size=7, bold=True)
+                event_p = paragraph(events, settings, size=size)
+                flow = Table(
+                    [[label_p, event_p]],
+                    colWidths=[width * 0.25, width * 0.75],
+                    hAlign="LEFT",
                 )
-            widths = [width * 0.29, width * 0.71]
-        else:
-            rows = [
-                [paragraph(x, settings, size=8, bold=True) for x in block["columns"]]
-            ] + [[paragraph(x, settings, size=8) for x in row] for row in block["rows"]]
-            widths = [width / len(block["columns"])] * len(block["columns"])
+                commands = [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    (
+                        "LINEBELOW",
+                        (0, 0),
+                        (-1, -1),
+                        0.25,
+                        colors.HexColor(settings["rule_color"]),
+                    ),
+                ]
+                if d["date"] == day:
+                    commands.append(
+                        (
+                            "BACKGROUND",
+                            (0, 0),
+                            (-1, -1),
+                            colors.HexColor(settings["accent"]).clone(alpha=0.12),
+                        )
+                    )
+                elif d["date"] < day:
+                    label_p.style.textColor = event_p.style.textColor = colors.HexColor(
+                        "#777777"
+                    )
+                flow.setStyle(TableStyle(commands))
+                flow._after_space = 0
+            flows.append(flow)
+        return flows
+    if kind == "table" and settings.get("_compact_blocks"):
+        # A responsive record layout, preserving every heading and cell. Unlike
+        # an indivisible table this can flow across narrow/differently sized regions.
+        rows = block["rows"] or [["" for _ in block["columns"]]]
+        flows = [
+            paragraph(
+                " · ".join(
+                    f"{label}: {value}" for label, value in zip(block["columns"], row)
+                ),
+                settings,
+                size=min(8, settings["body_size"]),
+            )
+            for row in rows
+        ]
+        for flow in flows:
+            flow._after_space = 2
+        return flows
+    if kind == "table":
+        rows = [
+            [
+                paragraph(x, settings, size=min(8, settings["body_size"]), bold=True)
+                for x in block["columns"]
+            ]
+        ] + [
+            [paragraph(x, settings, size=min(8, settings["body_size"])) for x in row]
+            for row in block["rows"]
+        ]
+        widths = [width / len(block["columns"])] * len(block["columns"])
         table = Table(rows, colWidths=widths, hAlign="LEFT")
         commands = [
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -655,40 +802,62 @@ def block_flowables(block, width, settings, day, image_data=None):
                 colors.HexColor(settings["rule_color"]),
             ),
         ]
-        if kind == "calendar":
-            for i, d in enumerate(block["days"]):
-                if d["date"] == day:
-                    commands.append(
-                        (
-                            "BACKGROUND",
-                            (0, i),
-                            (-1, i),
-                            colors.HexColor(settings["accent"]).clone(alpha=0.12),
-                        )
-                    )
-                elif d["date"] < day:
-                    for p in rows[i]:
-                        p.style.textColor = colors.HexColor("#777777")
-        else:
-            commands.append(("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")))
+        commands.append(("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")))
         table.setStyle(TableStyle(commands))
         return [table]
     if kind == "chart":
-        return [Chart(block, width, settings)]
+        return [Chart(block, width, settings, max_height)]
     if kind == "illustration":
         if not image_data:
             raise ValueError(
                 "An illustration asset is missing. Regenerate the edition."
             )
-        edge = min(width, 110)
+        caption = paragraph(block["caption"] + " · AI illustration", settings, size=7)
+        caption_height = caption.wrap(width, A4[1])[1]
+        edge = min(width, 110, max(24, (max_height or 1000) - caption_height - 8))
         return [
             Image(BytesIO(base64.b64decode(image_data)), width=edge, height=edge),
-            paragraph(block["caption"] + " · AI illustration", settings, size=7),
+            caption,
         ]
     raise ValueError("Unsupported content block: " + kind)
 
 
 def compose_regions(settings, issue):
+    """Try measured section-local fitting before requesting any paid text revision."""
+    overrides = {}
+    for stage in range(4):
+        try:
+            return _compose_regions(settings, issue, overrides)
+        except FitError as error:
+            if stage == 3:
+                raise
+            for section in settings["sections"]:
+                if section["name"] not in error.sections:
+                    continue
+                style = dict(
+                    _compact_blocks=True,
+                    padding_mm=min(settings["padding_mm"], 1.25),
+                    _spacing=2,
+                    headline_size=min(settings["headline_size"], 14),
+                )
+                if stage >= 1:
+                    style.update(
+                        body_size=min(settings["body_size"], 8),
+                        line_spacing=min(settings["line_spacing"], 1.1),
+                        headline_size=min(settings["headline_size"], 12),
+                    )
+                if stage >= 2:
+                    style.update(
+                        body_size=min(settings["body_size"], 7.5),
+                        line_spacing=1.05,
+                        headline_size=min(settings["headline_size"], 11),
+                        padding_mm=1,
+                        _spacing=1,
+                    )
+                overrides[section["id"]] = style
+
+
+def _compose_regions(settings, issue, overrides):
     """Measure and split paragraphs across assigned regions, without drawing or dropping."""
     regions = allocate(settings)
     sections = {s["id"]: s for s in issue["sections"]}
@@ -699,6 +868,7 @@ def compose_regions(settings, issue):
             "Section structure changed. Generate a new edition for these sections."
         )
     placements, failed = [], []
+    base_settings = settings
     pad, spacing = settings["padding_mm"] * mm, settings["body_size"] * 0.65
 
     def fill(r, sid, x, width, y, pending, bottom=None):
@@ -708,12 +878,48 @@ def compose_regions(settings, issue):
             link = None
             if typ == "block":
                 index, block = value
+                max_height = y - bottom
+                if block["type"] in ("chart", "illustration") and pending:
+                    # Reserve measured space for what follows, not just the current
+                    # graphic. Otherwise an immutable image can crowd out a planner
+                    # and prose shortening has no way to recover that lost height.
+                    reserve = 0
+                    for next_type, next_value in pending:
+                        if next_type == "block":
+                            j, next_block = next_value
+                            following = block_flowables(
+                                next_block,
+                                width,
+                                settings,
+                                issue["day"],
+                                issue.get("images", {}).get(f"{sid}:{j}"),
+                            )
+                        elif next_type == "source":
+                            following = [
+                                paragraph(
+                                    next_value["publisher"]
+                                    + " · "
+                                    + next_value["published_at"],
+                                    settings,
+                                    size=6.5,
+                                    face="Source Sans 3",
+                                )
+                            ]
+                        else:
+                            following = [next_value[0]]
+                        reserve += sum(
+                            f.wrap(width, A4[1])[1]
+                            + getattr(f, "_after_space", spacing)
+                            for f in following
+                        )
+                    max_height = max(36, max_height - min(reserve, max_height * 0.75))
                 flows = block_flowables(
                     block,
                     width,
                     settings,
                     issue["day"],
                     issue.get("images", {}).get(f"{sid}:{index}"),
+                    max_height=max_height,
                 )
                 if block["type"] in ("table", "calendar", "chart", "illustration"):
                     for n, f in enumerate(flows):
@@ -742,6 +948,7 @@ def compose_regions(settings, issue):
                         settings,
                         issue["day"],
                         issue.get("images", {}).get(f"{sid}:{index}"),
+                        max_height=y - bottom,
                     )[n]
                     f._origin = (index, block, n, width)
             measured_width, height = f.wrap(width, A4[1])
@@ -750,6 +957,7 @@ def compose_regions(settings, issue):
                 pending.appendleft(("flow", (f, link)))
                 break
             available = y - bottom
+            after_space = getattr(f, "_after_space", spacing)
             if (
                 getattr(f, "_keep_with_next", False)
                 and pending
@@ -770,7 +978,7 @@ def compose_regions(settings, issue):
                     first, rest = parts[0], parts[1:]
                     _, fh = first.wrap(width, available)
                     placements.append((r, first, x, y - fh, link))
-                    y -= fh + spacing
+                    y -= fh + after_space
                     pending.extendleft(
                         reversed([("flow", (part, link)) for part in rest])
                     )
@@ -778,9 +986,12 @@ def compose_regions(settings, issue):
                     pending.appendleft(("flow", (f, link)))
                 break
             placements.append((r, f, x, y - height, link))
-            y -= height + spacing
+            y -= height + after_space
 
     for sid in configured_ids:
+        settings = {**base_settings, **overrides.get(sid, {})}
+        pad = settings["padding_mm"] * mm
+        spacing = settings.get("_spacing", settings["body_size"] * 0.65)
         own = [r for r in regions if r.section_id == sid]
         section = sections[sid]
         # Content can flow across differently sized frames; rebuild only width-dependent items.
@@ -789,6 +1000,8 @@ def compose_regions(settings, issue):
             for src in section["sources"]:
                 pending.append(("source", src))
         for r in own:
+            if not pending:
+                break
             width = r.width - 2 * pad
             label = names[sid].upper() + (" · CONTINUED" if r.continuation else "")
             label_p = paragraph(
@@ -819,7 +1032,11 @@ def compose_regions(settings, issue):
                 ]
             )
             y -= lh + hh + 2 * spacing
-            if len({cell % 2 for cell in r.cells}) == 2:
+            structured = any(
+                b["type"] in ("calendar", "table", "chart", "illustration")
+                for b in section["blocks"]
+            )
+            if len({cell % 2 for cell in r.cells}) == 2 and not structured:
                 gutter = settings["gutter_mm"] * mm
                 column_width = (width - gutter) / 2
                 # Balance prose columns when this region can hold the remaining text.
@@ -930,7 +1147,9 @@ def draw_masthead(c, settings, issue):
         sub = paragraph(
             settings["tagline"], settings, size=8, face=settings["body_font"], align=1
         )
-        date_p = paragraph(meta.upper(), settings, size=7, face=settings["body_font"], align=1)
+        date_p = paragraph(
+            meta.upper(), settings, size=7, face=settings["body_font"], align=1
+        )
         heights = [p.wrap(width, height)[1] for p in [title, sub, date_p]]
         if sum(heights) + 32 <= height:
             break
@@ -945,8 +1164,14 @@ def draw_masthead(c, settings, issue):
     # A full-width date strip is anchored to the grid, not floating under the title.
     strip_bottom = h - margin - height + 4
     date_p.drawOn(c, margin, strip_bottom + 5)
-    draw_rule(c, settings, margin, strip_bottom + heights[2] + 10,
-              w - margin, strip_bottom + heights[2] + 10)
+    draw_rule(
+        c,
+        settings,
+        margin,
+        strip_bottom + heights[2] + 10,
+        w - margin,
+        strip_bottom + heights[2] + 10,
+    )
     draw_rule(
         c,
         settings,
@@ -997,12 +1222,25 @@ def render_pdf(settings, issue):
                 )
             if len({cell % 2 for cell in r.cells}) == 2:
                 # Fine article-column rules reinforce the broadsheet silhouette.
-                own = [(flow, x, y) for region, flow, x, y, _ in placements
-                       if region == r and isinstance(flow, Paragraph) and flow.width < r.width / 2]
+                own = [
+                    (flow, x, y)
+                    for region, flow, x, y, _ in placements
+                    if region == r
+                    and isinstance(flow, Paragraph)
+                    and flow.width < r.width / 2
+                ]
                 midpoint = r.x + r.width / 2
-                if any(x > midpoint for _, x, _ in own) and any(x < midpoint for _, x, _ in own):
-                    draw_rule(c, settings, midpoint, min(y for _, _, y in own),
-                              midpoint, max(y + f.height for f, _, y in own))
+                if any(x > midpoint for _, x, _ in own) and any(
+                    x < midpoint for _, x, _ in own
+                ):
+                    draw_rule(
+                        c,
+                        settings,
+                        midpoint,
+                        min(y for _, _, y in own),
+                        midpoint,
+                        max(y + f.height for f, _, y in own),
+                    )
         for r, flow, x, y, link in placements:
             if r.page != page:
                 continue

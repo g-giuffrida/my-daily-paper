@@ -147,6 +147,12 @@ def control(method, label, field, *args, **kwargs):
     )
 
 
+def pdf_signature(settings):
+    # Invalidate previously cached PDFs when the fitter changes, without touching
+    # browser preferences or triggering another generation/API call.
+    return "adaptive-layout-v1:" + json.dumps(settings, sort_keys=True)
+
+
 st.markdown(
     '<div class="eyebrow">YOUR PERSONAL NEWSROOM</div><div class="brand">My Daily Paper</div><div class="intro">One sheet. Two sides. A new edition every day.</div>',
     unsafe_allow_html=True,
@@ -234,8 +240,11 @@ with left:
         st.selectbox(
             "Design preset", list(PRESETS), key="design_preset", on_change=apply_preset
         )
-        st.button("Use classic broadsheet style", on_click=use_classic_style,
-                  help="Blackletter masthead, serif headlines, justified columns and fine black rules. Keeps your content and prompts.")
+        st.button(
+            "Use classic broadsheet style",
+            on_click=use_classic_style,
+            help="Blackletter masthead, serif headlines, justified columns and fine black rules. Keeps your content and prompts.",
+        )
         control(
             st.selectbox, "Masthead font", "masthead_font", ["UnifrakturCook"] + FONTS
         )
@@ -311,7 +320,8 @@ with left:
         use_container_width=True,
     )
     st.caption(
-        "Generate whenever you want a fresh edition. Printing uses your normal system dialog."
+        "Sections auto-fit: calendars and graphics can use the full section width; "
+        "spacing and type tighten only where needed. Printing uses your normal system dialog."
     )
 
 if generate or sample:
@@ -336,7 +346,7 @@ if generate or sample:
                     (s["id"], s["name"], s["prompt"]) for s in settings["sections"]
                 ]
                 st.session_state.pdf = pdf
-                st.session_state.render_signature = json.dumps(settings, sort_keys=True)
+                st.session_state.render_signature = pdf_signature(settings)
                 if generate:
                     st.session_state.history = (
                         st.session_state.history
@@ -386,7 +396,7 @@ with right:
                 )
             if issue.get("sample"):
                 issue = demo_issue(settings)
-            signature = json.dumps(settings, sort_keys=True)
+            signature = pdf_signature(settings)
             if not issue.get("sample") and signature == st.session_state.get(
                 "render_signature"
             ):
@@ -405,9 +415,11 @@ with right:
                 default=None,
             )
             st.download_button(
-                "↓ Download sample PDF"
-                if issue.get("sample")
-                else "↓ Download two-page PDF",
+                (
+                    "↓ Download sample PDF"
+                    if issue.get("sample")
+                    else "↓ Download two-page PDF"
+                ),
                 pdf,
                 file_name=f"my-daily-paper-{issue['day']}"
                 + ("-sample" if issue.get("sample") else "")
