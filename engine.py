@@ -404,6 +404,7 @@ def demo_issue(settings=None, day=None):
                     "text": "The section occupies exactly the space you assigned. Change the type, rules, and color to make the newspaper yours. This preview uses the very same PDF that you can download and print.",
                 }
             )
+        if words >= 175:
             blocks.append({"type": "heading", "text": "The context behind the story"})
             blocks.append(
                 {

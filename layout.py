@@ -76,7 +76,8 @@ def budgets(settings):
             1,
             int((r.height - 2 * pad - 2.5 * settings["headline_size"] - 20) / leading),
         )
-        words = int(lines * (r.width - 2 * pad) / (settings["body_size"] * 2.7))
+        word_width = 3.6 if settings["body_font"] == "IBM Plex Mono" else 2.7
+        words = int(lines * (r.width - 2 * pad) / (settings["body_size"] * word_width))
         entry = out.setdefault(r.section_id, {"words": 0, "regions": []})
         entry["words"] += max(15, int(words * 0.80))
         entry["regions"].append(
