@@ -10,7 +10,7 @@ import json
 import math
 from pathlib import Path
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
@@ -23,7 +23,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Flowable, Image, Paragraph, Table, TableStyle
 
-from layout import allocate, budgets
+from layout import allocate, budgets, region_headline_size
 from settings import DEFAULT, FONTS, settings_errors
 
 ROOT = Path(__file__).resolve().parent
@@ -37,6 +37,20 @@ class FitError(ValueError):
             + ", ".join(self.sections)
             + ". Shorten these sections or adjust space, typography, or padding."
         )
+
+
+class CitationError(ValueError):
+    """A model-written citation is not grounded in tool-returned sources."""
+
+
+def citation_key(url):
+    """Ignore fragments and known tracking only, not meaningful query parameters."""
+    p = urlparse(url)
+    query = sorted((k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
+                   if not k.lower().startswith("utm_")
+                   and k.lower() not in {"fbclid", "gclid", "msclkid"})
+    return urlunparse((p.scheme.lower(), p.netloc.lower(), p.path or "/",
+                       p.params, urlencode(query), ""))
 
 
 def edition_day(settings, now=None):
@@ -172,9 +186,15 @@ def validate_issue(issue, settings, day, searched_urls=None):
                 if date.fromisoformat(src["published_at"]) > date.fromisoformat(day):
                     raise ValueError("A source publication date is in the future.")
             if searched_urls is not None and src["url"] not in searched_urls:
-                raise ValueError(
-                    "A citation was not present in the research results. Please regenerate."
-                )
+                matches = sorted(u for u in searched_urls
+                                 if citation_key(u) == citation_key(src["url"]))
+                if matches:
+                    # Render the original verified link, not a model's URL variant.
+                    src["url"] = matches[0]
+                else:
+                    raise CitationError(
+                        f"{expected[section['id']]['name']}: a citation could not be verified against the research results."
+                    )
         if sum(b["type"] == "illustration" for b in section["blocks"]) > 1:
             raise ValueError("Use at most one illustration per section.")
         for b in section["blocks"]:
@@ -298,7 +318,40 @@ def generate_issue(settings, key, day, history=None, client=None):
             "The editor did not return live research sources for the news sections. Please regenerate."
         )
     issue = json.loads(response.output_text)
-    validate_issue(issue, settings, day, searched)
+    for attempt in range(3):
+        try:
+            validate_issue(issue, settings, day, searched)
+            break
+        except CitationError as error:
+            if attempt == 2:
+                raise CitationError(
+                    f"{error} Automatic source repair failed after two attempts; "
+                    "try a narrower news prompt or a different text model."
+                ) from error
+            # Re-research unsupported claims, rather than attaching an unrelated
+            # approved URL or silently removing the offending citation.
+            repair = client.responses.create(
+                model=settings["model"],
+                tools=[{"type": "web_search"}],
+                include=["web_search_call.action.sources"],
+                input=[
+                    {"role": "system", "content": editorial_instructions(settings, day, history or [])},
+                    {"role": "user", "content":
+                        "Repair this edition's unverified citations. Search again to verify the affected claims. "
+                        "Copy citation URLs exactly from web search results. Do not merely replace an unsupported "
+                        "link with an unrelated allowed URL. Rewrite unsupported reporting to match verified sources; "
+                        "if no update is verified, explicitly say so. Preserve unaffected sections, IDs and order. "
+                        "Return the complete edition. Validation error: " + str(error)
+                        + ". Previously verified URLs: " + json.dumps(sorted(searched))
+                        + ". Draft: " + json.dumps(issue, ensure_ascii=False)},
+                ],
+                text={"format": {"type": "json_schema", "name": "daily_newspaper",
+                                 "strict": True, "schema": SCHEMA}},
+            )
+            if not repair.output_text:
+                raise CitationError("Source repair returned no content. Try another text model.")
+            searched.update(collect_source_urls(repair))
+            issue = json.loads(repair.output_text)
     issue.update(day=day, timezone=settings["timezone"], sample=False)
     images = {}
     for section in issue["sections"]:
@@ -551,7 +604,7 @@ def paragraph(text, settings, size=None, bold=False, face=None, color=None, alig
 def block_flowables(block, width, settings, day, image_data=None):
     kind = block["type"]
     if kind == "paragraph":
-        return [paragraph(block["text"], settings)]
+        return [paragraph(block["text"], settings, align=4)]
     if kind == "heading":
         heading = paragraph(
             block["text"],
@@ -749,7 +802,7 @@ def compose_regions(settings, issue):
             head_p = paragraph(
                 section["headline"],
                 settings,
-                size=settings["headline_size"],
+                size=region_headline_size(settings, r),
                 bold=True,
                 face=settings["headline_font"],
             )
@@ -875,27 +928,34 @@ def draw_masthead(c, settings, issue):
             align=1,
         )
         sub = paragraph(
-            settings["tagline"], settings, size=8, face="Source Sans 3", align=1
+            settings["tagline"], settings, size=8, face=settings["body_font"], align=1
         )
-        date_p = paragraph(meta, settings, size=7, face="Source Sans 3", align=1)
+        date_p = paragraph(meta.upper(), settings, size=7, face=settings["body_font"], align=1)
         heights = [p.wrap(width, height)[1] for p in [title, sub, date_p]]
-        if sum(heights) + 20 <= height:
+        if sum(heights) + 32 <= height:
             break
         size -= 1
     else:
         raise FitError(["Newspaper title / subtitle"])
     y = h - margin - 5
-    for p, ph in zip([title, sub, date_p], heights):
+    draw_rule(c, settings, margin, h - margin, w - margin, h - margin)
+    for p, ph in zip([title, sub], heights[:2]):
         p.drawOn(c, margin, y - ph)
         y -= ph + 5
+    # A full-width date strip is anchored to the grid, not floating under the title.
+    strip_bottom = h - margin - height + 4
+    date_p.drawOn(c, margin, strip_bottom + 5)
+    draw_rule(c, settings, margin, strip_bottom + heights[2] + 10,
+              w - margin, strip_bottom + heights[2] + 10)
     draw_rule(
         c,
         settings,
         margin,
-        h - margin - height + 4,
+        strip_bottom,
         w - margin,
-        h - margin - height + 4,
+        strip_bottom,
     )
+    draw_rule(c, settings, margin, strip_bottom - 2, w - margin, strip_bottom - 2)
 
 
 def render_pdf(settings, issue):
@@ -935,6 +995,14 @@ def render_pdf(settings, issue):
                     r.x + r.width,
                     r.y + r.height + gap / 2,
                 )
+            if len({cell % 2 for cell in r.cells}) == 2:
+                # Fine article-column rules reinforce the broadsheet silhouette.
+                own = [(flow, x, y) for region, flow, x, y, _ in placements
+                       if region == r and isinstance(flow, Paragraph) and flow.width < r.width / 2]
+                midpoint = r.x + r.width / 2
+                if any(x > midpoint for _, x, _ in own) and any(x < midpoint for _, x, _ in own):
+                    draw_rule(c, settings, midpoint, min(y for _, _, y in own),
+                              midpoint, max(y + f.height for f, _, y in own))
         for r, flow, x, y, link in placements:
             if r.page != page:
                 continue

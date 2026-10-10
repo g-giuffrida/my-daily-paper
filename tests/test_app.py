@@ -56,3 +56,8 @@ def test_presets_and_sample_generation():
     assert not test.exception
     assert test.session_state["edition"]["sample"]
     assert test.session_state["history"] == []
+    next(b for b in test.button if b.label == "Use classic broadsheet style").click().run()
+    assert not test.exception
+    assert test.session_state["settings"]["accent"] == "#171717"
+    assert test.session_state["settings"]["masthead_font"] == "UnifrakturCook"
+    assert test.session_state["settings"]["line_spacing"] == 1.15

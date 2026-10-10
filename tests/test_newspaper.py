@@ -12,6 +12,8 @@ from reportlab.lib.units import mm
 
 from engine import (
     FitError,
+    CitationError,
+    collect_source_urls,
     compose_regions,
     demo_issue,
     edition_day,
@@ -355,7 +357,60 @@ def test_long_masthead_never_truncated():
     s = configuration([2] * 6)
     s["name"] = "The Extraordinary Morning Newspaper for Curious Readers"
     text = PdfReader(BytesIO(render_pdf(s, demo_issue(s, DAY)))).pages[0].extract_text()
-    assert s["name"] in text.replace("\n", " ")
+    assert s["name"] in " ".join(text.split())
+
+
+def test_citation_tracking_variants_use_original_verified_link():
+    s = configuration([2] * 6)
+    issue = demo_issue(s, DAY)
+    verified = "https://example.org/story?id=42&utm_source=search"
+    issue["sections"][0]["sources"] = [
+        {"publisher": "Source", "url": "https://example.org/story?id=42#main", "published_at": DAY}
+    ]
+    validate_issue(issue, s, DAY, {verified})
+    assert issue["sections"][0]["sources"][0]["url"] == verified
+    issue["sections"][0]["sources"][0]["url"] = "https://example.org/story?id=43"
+    with pytest.raises(CitationError):
+        validate_issue(issue, s, DAY, {verified})
+
+
+def test_unverified_citation_researches_and_repairs_with_bounded_attempts():
+    s = configuration([2] * 6)
+    s["sections"][0]["prompt"] = "Latest news today"
+    bad = demo_issue(s, DAY)
+    bad["sections"][0]["sources"] = [
+        {"publisher": "Source", "url": "https://example.org/unverified", "published_at": DAY}
+    ]
+    good = deepcopy(bad)
+    good["sections"][0]["sources"][0]["url"] = "https://example.org/new-research"
+    calls = []
+    replies = iter([FakeResponse(bad, ["https://example.org/search"]),
+                    FakeResponse(good, ["https://example.org/new-research"])])
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return next(replies)
+
+    result = generate_issue(s, "unused", DAY,
+                            client=SimpleNamespace(responses=SimpleNamespace(create=create)))
+    assert result["sections"][0]["sources"][0]["url"] == "https://example.org/new-research"
+    assert len(calls) == 2 and calls[1]["tools"] == [{"type": "web_search"}]
+    assert "unrelated allowed URL" in calls[1]["input"][1]["content"]
+    calls.clear()
+    replies = iter([FakeResponse(bad, ["https://example.org/search"])] * 3)
+    with pytest.raises(CitationError, match="two attempts"):
+        generate_issue(s, "unused", DAY,
+                       client=SimpleNamespace(responses=SimpleNamespace(create=create)))
+    assert len(calls) == 3
+
+
+def test_source_collection_includes_open_pages_and_annotations_not_written_json():
+    response = {"output": [
+        {"type": "web_search_call", "action": {"type": "open_page", "url": "https://example.org/open"}},
+        {"type": "message", "content": [{"text": '{"url":"https://example.org/fake"}',
+            "annotations": [{"type": "url_citation", "url": "https://example.org/cited"}]}]},
+    ]}
+    assert collect_source_urls(response) == {"https://example.org/open", "https://example.org/cited"}
 
 
 def test_today_lesson_does_not_require_news_research():
