@@ -246,8 +246,25 @@ def test_whitelist_storage_and_history():
 
 
 class FakeResponse:
-    def __init__(self, issue, urls=()):
-        self.output_text = json.dumps({"sections": issue["sections"]})
+    def __init__(self, issue, urls=(), draft=True):
+        if draft:
+            sections = {}
+            for section in issue["sections"]:
+                entry = {k: v for k, v in section.items() if k not in ("id", "sources")}
+                entry["source_refs"] = [
+                    {
+                        "source_id": f"S{list(urls).index(src['url']) + 1}",
+                        "published_at": src["published_at"],
+                    }
+                    for src in section["sources"]
+                ]
+                sections[section["id"]] = entry
+        else:
+            sections = {
+                s["id"]: {k: v for k, v in s.items() if k not in ("id", "sources")}
+                for s in issue["sections"]
+            }
+        self.output_text = json.dumps({"sections": sections})
         self.urls = urls
 
     def model_dump(self):
@@ -267,7 +284,7 @@ def test_generation_captures_day_history_and_bounded_repair():
     issue["sections"][0]["blocks"][0]["text"] = "Overlong material. " * 900
     good = demo_issue(s, DAY)
     calls = []
-    replies = iter([FakeResponse(issue), FakeResponse(good)])
+    replies = iter([FakeResponse(issue), FakeResponse(good, draft=False)])
 
     def create(**kwargs):
         calls.append(kwargs)
@@ -284,7 +301,13 @@ def test_generation_captures_day_history_and_bounded_repair():
     assert len(calls) == 2
     assert "Old lesson" in calls[0]["input"][0]["content"]
     assert DAY in calls[0]["input"][0]["content"]
-    replies = iter([FakeResponse(issue)] * 3)
+    replies = iter(
+        [
+            FakeResponse(issue),
+            FakeResponse(issue, draft=False),
+            FakeResponse(issue, draft=False),
+        ]
+    )
     with pytest.raises(FitError):
         generate_issue(
             s,
@@ -296,20 +319,9 @@ def test_generation_captures_day_history_and_bounded_repair():
         )
 
 
-def test_live_news_requires_research_and_api_failure_propagates():
+def test_api_failure_propagates_without_fabricated_newspaper():
     s = configuration([2] * 6)
     s["sections"][0]["prompt"] = "Latest news today"
-    with pytest.raises(ValueError, match="live research"):
-        generate_issue(
-            s,
-            "unused",
-            DAY,
-            client=SimpleNamespace(
-                responses=SimpleNamespace(
-                    create=lambda **kw: FakeResponse(demo_issue(s, DAY))
-                )
-            ),
-        )
 
     def fail(**kwargs):
         raise RuntimeError("Model unavailable")
@@ -365,7 +377,11 @@ def test_citation_tracking_variants_use_original_verified_link():
     issue = demo_issue(s, DAY)
     verified = "https://example.org/story?id=42&utm_source=search"
     issue["sections"][0]["sources"] = [
-        {"publisher": "Source", "url": "https://example.org/story?id=42#main", "published_at": DAY}
+        {
+            "publisher": "Source",
+            "url": "https://example.org/story?id=42#main",
+            "published_at": DAY,
+        }
     ]
     validate_issue(issue, s, DAY, {verified})
     assert issue["sections"][0]["sources"][0]["url"] == verified
@@ -374,43 +390,68 @@ def test_citation_tracking_variants_use_original_verified_link():
         validate_issue(issue, s, DAY, {verified})
 
 
-def test_unverified_citation_researches_and_repairs_with_bounded_attempts():
+def test_research_and_editing_do_not_ask_model_to_copy_urls():
     s = configuration([2] * 6)
     s["sections"][0]["prompt"] = "Latest news today"
-    bad = demo_issue(s, DAY)
-    bad["sections"][0]["sources"] = [
-        {"publisher": "Source", "url": "https://example.org/unverified", "published_at": DAY}
+    good = demo_issue(s, DAY)
+    good["sections"][0]["sources"] = [
+        {
+            "publisher": "example.org",
+            "url": "https://example.org/new-research",
+            "published_at": DAY,
+        }
     ]
-    good = deepcopy(bad)
-    good["sections"][0]["sources"][0]["url"] = "https://example.org/new-research"
     calls = []
-    replies = iter([FakeResponse(bad, ["https://example.org/search"]),
-                    FakeResponse(good, ["https://example.org/new-research"])])
+    research = FakeResponse(demo_issue(s, DAY), ["https://example.org/new-research"])
+    research.output_text = "Verified reporting with publication date " + DAY
+    replies = iter([research, FakeResponse(good, ["https://example.org/new-research"])])
 
     def create(**kwargs):
         calls.append(kwargs)
         return next(replies)
 
-    result = generate_issue(s, "unused", DAY,
-                            client=SimpleNamespace(responses=SimpleNamespace(create=create)))
-    assert result["sections"][0]["sources"][0]["url"] == "https://example.org/new-research"
-    assert len(calls) == 2 and calls[1]["tools"] == [{"type": "web_search"}]
-    assert "unrelated allowed URL" in calls[1]["input"][1]["content"]
-    calls.clear()
-    replies = iter([FakeResponse(bad, ["https://example.org/search"])] * 3)
-    with pytest.raises(CitationError, match="two attempts"):
-        generate_issue(s, "unused", DAY,
-                       client=SimpleNamespace(responses=SimpleNamespace(create=create)))
-    assert len(calls) == 3
+    result = generate_issue(
+        s,
+        "unused",
+        DAY,
+        client=SimpleNamespace(responses=SimpleNamespace(create=create)),
+    )
+    assert (
+        result["sections"][0]["sources"][0]["url"] == "https://example.org/new-research"
+    )
+    assert len(calls) == 2 and calls[0]["tool_choice"] == "required"
+    assert "tools" not in calls[1]
+    fields = calls[1]["text"]["format"]["schema"]["properties"]["sections"][
+        "properties"
+    ]["s0"]["properties"]
+    assert "sources" not in fields
+    assert fields["source_refs"]["items"]["properties"]["source_id"]["enum"] == ["S1"]
 
 
 def test_source_collection_includes_open_pages_and_annotations_not_written_json():
-    response = {"output": [
-        {"type": "web_search_call", "action": {"type": "open_page", "url": "https://example.org/open"}},
-        {"type": "message", "content": [{"text": '{"url":"https://example.org/fake"}',
-            "annotations": [{"type": "url_citation", "url": "https://example.org/cited"}]}]},
-    ]}
-    assert collect_source_urls(response) == {"https://example.org/open", "https://example.org/cited"}
+    response = {
+        "output": [
+            {
+                "type": "web_search_call",
+                "action": {"type": "open_page", "url": "https://example.org/open"},
+            },
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "text": '{"url":"https://example.org/fake"}',
+                        "annotations": [
+                            {"type": "url_citation", "url": "https://example.org/cited"}
+                        ],
+                    }
+                ],
+            },
+        ]
+    }
+    assert collect_source_urls(response) == {
+        "https://example.org/open",
+        "https://example.org/cited",
+    }
 
 
 def test_today_lesson_does_not_require_news_research():

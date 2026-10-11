@@ -119,6 +119,11 @@ def test_week_overflow_is_fixed_without_paid_revisions_or_mutating_issue():
     issue = demo_issue(settings, DAY)
     issue["sections"][-1]["blocks"] = [planner(events=4, long=True)]
     original = deepcopy(issue)
+    # This fixture isolates layout; researched generation is covered separately.
+    for section in settings["sections"]:
+        section["prompt"] = (
+            "A weekly planner" if section["id"] == "week" else "An educational essay"
+        )
     calls = []
 
     def create(**kwargs):
@@ -193,6 +198,7 @@ def test_all_2048_allocations_with_calendars_have_in_bounds_placements():
 
 def test_shortening_keeps_original_calendar_and_sources_even_if_model_changes_them():
     settings = configuration([2] * 6)
+    settings["sections"][0]["prompt"] = "Latest news and my weekly planner"
     issue = demo_issue(settings, DAY)
     section = issue["sections"][0]
     section["blocks"] = [
@@ -201,7 +207,7 @@ def test_shortening_keeps_original_calendar_and_sources_even_if_model_changes_th
     ]
     section["sources"] = [
         {
-            "publisher": "Verified",
+            "publisher": "example.org",
             "url": "https://example.org/verified",
             "published_at": DAY,
         }
@@ -215,7 +221,11 @@ def test_shortening_keeps_original_calendar_and_sources_even_if_model_changes_th
     revised["sections"][0]["blocks"][1]["days"][0]["events"] = ["Invented attendance"]
     revised["sections"][0]["sources"][0]["url"] = "https://example.org/unverified"
     replies = iter(
-        [FakeResponse(issue, ["https://example.org/verified"]), FakeResponse(revised)]
+        [
+            FakeResponse(issue, ["https://example.org/verified"]),
+            FakeResponse(issue, ["https://example.org/verified"]),
+            FakeResponse(revised, draft=False),
+        ]
     )
     result = generate_issue(
         settings,
@@ -296,7 +306,7 @@ def test_shortening_remaps_illustration_when_prose_blocks_are_removed():
     revised["sections"][0]["blocks"] = [
         {"type": "paragraph", "text": "Short reporting."}
     ]
-    replies = iter([FakeResponse(issue), FakeResponse(revised)])
+    replies = iter([FakeResponse(issue), FakeResponse(revised, draft=False)])
     client = SimpleNamespace(
         responses=SimpleNamespace(create=lambda **kw: next(replies)),
         images=SimpleNamespace(

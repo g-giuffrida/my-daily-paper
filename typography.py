@@ -29,31 +29,13 @@ def _face(name):
 
 
 def printable_text(value):
-    """Normalize invisible formatting; retain readable identities for complex emoji."""
+    """Normalize text without inserting descriptive labels into the newspaper."""
     text = (
         unicodedata.normalize("NFC", str(value))
         .replace("\r\n", "\n")
         .replace("\r", "\n")
     )
 
-    def emoji_text(chars, data):
-        # Flags, skin tones and joined emoji require sequence-specific glyphs.
-        # Their short labels retain the intended meaning across PDF renderers.
-        if (
-            "\u200d" in chars
-            or "\u20e3" in chars
-            or any(
-                0x1F1E6 <= ord(c) <= 0x1F1FF
-                or 0x1F3FB <= ord(c) <= 0x1F3FF
-                or 0xE0020 <= ord(c) <= 0xE007F
-                for c in chars
-            )
-        ):
-            return "[" + data["en"].strip(":").replace("_", " ") + "]"
-        return chars.replace("\ufe0e", "").replace("\ufe0f", "")
-
-    if any(ord(c) >= 0x2000 for c in text):
-        text = emoji.replace_emoji(text, replace=emoji_text)
     result = []
     for char in text:
         code, category = ord(char), unicodedata.category(char)
@@ -61,14 +43,14 @@ def printable_text(value):
             result.append("\n")
         elif char.isspace():
             result.append(" ")
-        elif (
-            category in {"Cc", "Cf"}
-            or 0xFE00 <= code <= 0xFE0F
-            or 0xE0100 <= code <= 0xE01EF
+        elif category == "Cc" or (
+            category == "Cf"
+            and char not in "\u200c\u200d"
+            and not 0xE0020 <= code <= 0xE007F
         ):
             continue
         elif category in {"Cs", "Co", "Cn"}:
-            result.append(f"[U+{code:04X}]")
+            result.append("\ufffd")
         else:
             result.append(char)
     return "".join(result)
@@ -104,17 +86,31 @@ def font_markup(value, preferred):
             )
             chunk.clear()
 
-    for char in text:
+    # Keep joined emoji in a single font run for HarfBuzz's GSUB shaping.
+    sequences = (
+        {item["match_start"]: item for item in emoji.emoji_list(text)}
+        if any(ord(c) >= 0x2000 for c in text)
+        else {}
+    )
+    position = 0
+    while position < len(text):
+        item = sequences.get(position)
+        if item:
+            char = item["emoji"]
+            position = item["match_end"]
+            chosen = "NotoEmoji-Regular"
+            _face(chosen)
+        else:
+            char = text[position]
+            position += 1
+            chosen = _character_font(char, preferred)
         if char == "\n":
             flush()
             runs.append("<br/>")
             current = None
             continue
-        chosen = _character_font(char, preferred)
         if chosen is None:
-            # Keep an explicit identity for genuinely unencoded/rare glyphs. This
-            # path can never produce .notdef or an unsupported-character exception.
-            char = f"[U+{ord(char):04X}]"
+            char = "\ufffd"
             chosen = "SourceSans3-Regular"
         if chosen != current:
             flush()
@@ -127,6 +123,8 @@ def font_markup(value, preferred):
 def text_direction(value):
     """Enable glyph shaping only where needed, preserving existing Latin layouts."""
     text = printable_text(value)
+    if any(ord(c) >= 0x2000 for c in text) and emoji.emoji_list(text):
+        return "LTR"
     if not any(0x0590 <= ord(c) <= 0x109F or 0x1780 <= ord(c) <= 0x17FF for c in text):
         return None
     for char in text:

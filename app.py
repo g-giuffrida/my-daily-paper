@@ -24,6 +24,7 @@ from settings import (
 )
 
 ROOT = Path(__file__).resolve().parent
+BUILD_VERSION = "2026.10.11-source-ids"
 storage = components.declare_component(
     "paper_storage", path=str(ROOT / "components" / "storage")
 )
@@ -36,6 +37,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+st.caption(f"Build {BUILD_VERSION}")
 st.markdown(
     """<style>
 .stApp{background:#f7f7f3;color:#242a2b}.block-container{padding-top:2rem;max-width:1450px}
@@ -150,7 +152,7 @@ def control(method, label, field, *args, **kwargs):
 def pdf_signature(settings):
     # Invalidate previously cached PDFs when the fitter changes, without touching
     # browser preferences or triggering another generation/API call.
-    return "unicode-layout-v2:" + json.dumps(settings, sort_keys=True)
+    return BUILD_VERSION + ":" + json.dumps(settings, sort_keys=True)
 
 
 st.markdown(

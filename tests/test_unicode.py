@@ -41,13 +41,10 @@ def test_every_selected_font_gets_real_fallback_glyphs(family, bold):
 def test_normalization_and_safe_last_resort():
     register_fonts()
     assert printable_text("Cafe\u0301\t✓\r\nnext\x00") == "Café ✓\nnext"
-    assert (
-        printable_text("🏋️‍♂️ 🇨🇭 👍🏽")
-        == "[man lifting weights] [Switzerland] [thumbs up medium skin tone]"
-    )
+    assert printable_text("🏋️‍♂️ 🇨🇭 👍🏽") == "🏋️‍♂️ 🇨🇭 👍🏽"
     text = font_markup("<script>&\ud800\ue000\U0010ffff", font("Source Serif 4"))
     assert "&lt;script&gt;&amp;" in text
-    assert all(label in text for label in ["[U+D800]", "[U+E000]", "[U+10FFFF]"])
+    assert "[U+" not in text
     assert "<script>" not in text
 
 
@@ -85,7 +82,8 @@ def test_unicode_edition_is_two_pages_with_measured_bounds():
     assert len(doc) == 2
     text = "".join(page.get_text() for page in doc)
     assert "日本語" in text and "Zürich" in text
-    assert text.count("man lifting weights") == 7
+    assert "man lifting weights" not in text and "[U+" not in text
+    assert text.count("18:00 Gym") == 7
 
 
 def test_cached_unicode_edition_renders_in_app():

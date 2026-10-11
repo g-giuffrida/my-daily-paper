@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from typography import _face
 
 
 @dataclass(frozen=True)
@@ -66,8 +68,11 @@ def allocate(settings):
 
 
 def region_headline_size(settings, region):
-    if (region.section_id == settings["sections"][0]["id"]
-            and not region.continuation and len(region.cells) >= 2):
+    if (
+        region.section_id == settings["sections"][0]["id"]
+        and not region.continuation
+        and len(region.cells) >= 2
+    ):
         return min(24, settings["headline_size"] + 3)
     return settings["headline_size"]
 
@@ -77,15 +82,39 @@ def budgets(settings):
     out = {}
     pad = settings["padding_mm"] * mm
     leading = settings["body_size"] * settings["line_spacing"]
+    family = settings["body_font"].replace(" ", "") + "-Regular"
+    _face(family)
+    sample = "A daily newspaper explains important developments with context facts and clear reporting "
+    average_word_width = pdfmetrics.stringWidth(
+        sample, family, settings["body_size"]
+    ) / len(sample.split())
     for r in allocate(settings):
         # Conservative average character width and words per line; rendering is authoritative.
         lines = max(
             1,
-            int((r.height - 2 * pad - 2.5 * region_headline_size(settings, r) - 20) / leading),
+            int(
+                (r.height - 2 * pad - 2.5 * region_headline_size(settings, r) - 20)
+                / leading
+            ),
         )
-        word_width = 3.6 if settings["body_font"] == "IBM Plex Mono" else 2.7
-        words = int(lines * (r.width - 2 * pad) / (settings["body_size"] * word_width))
-        entry = out.setdefault(r.section_id, {"words": 0, "regions": []})
+        # A merged prose region still has two newspaper columns and a gutter.
+        usable_width = r.width - 2 * pad
+        if len({cell % 2 for cell in r.cells}) == 2:
+            usable_width -= settings["gutter_mm"] * mm
+        words = int(lines * usable_width / average_word_width)
+        entry = out.setdefault(
+            r.section_id,
+            {
+                "words": 0,
+                "regions": [],
+                "body_font": settings["body_font"],
+                "body_size_pt": settings["body_size"],
+                "line_height_pt": round(leading, 2),
+                "headline_font": settings["headline_font"],
+                "headline_size_pt": settings["headline_size"],
+                "padding_mm": settings["padding_mm"],
+            },
+        )
         entry["words"] += max(15, int(words * 0.80))
         entry["regions"].append(
             {
