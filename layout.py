@@ -73,7 +73,7 @@ def region_headline_size(settings, region):
         and not region.continuation
         and len(region.cells) >= 2
     ):
-        return min(24, settings["headline_size"] + 3)
+        return min(26, settings["headline_size"] + 5)
     return settings["headline_size"]
 
 
@@ -93,7 +93,7 @@ def budgets(settings):
         lines = max(
             1,
             int(
-                (r.height - 2 * pad - 2.5 * region_headline_size(settings, r) - 20)
+                (r.height - 2 * pad - 1.6 * region_headline_size(settings, r) - 18)
                 / leading
             ),
         )
@@ -115,7 +115,7 @@ def budgets(settings):
                 "padding_mm": settings["padding_mm"],
             },
         )
-        entry["words"] += max(15, int(words * 0.80))
+        entry["words"] += max(15, int(words * 0.92))
         entry["regions"].append(
             {
                 "page": r.page + 1,
@@ -123,4 +123,7 @@ def budgets(settings):
                 "height_mm": round((r.height - 2 * pad) / mm, 1),
             }
         )
+    for entry in out.values():
+        entry["target_words"] = round(entry["words"] * 0.95)
+        entry["minimum_words"] = round(entry["words"] * 0.82)
     return out

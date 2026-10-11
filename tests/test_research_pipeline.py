@@ -315,4 +315,4 @@ def test_generate_button_completes_researched_edition_and_history(monkeypatch):
     assert test.session_state["edition"]["day"] == day
     assert test.session_state["history"][-1]["day"] == day
     assert len(PdfReader(BytesIO(test.session_state["pdf"])).pages) == 2
-    assert any("2026.10.11-source-ids" in c.value for c in test.caption)
+    assert any("2026.10.11-full-pages" in c.value for c in test.caption)

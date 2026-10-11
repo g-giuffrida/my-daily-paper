@@ -292,10 +292,16 @@ def editorial_instructions(settings, day, history):
         "Never invent facts, quotes, prices, chart data, events, source URLs, or dates. Distinguish older reporting, interpretation, and verified current news. "
         "Use only 1–3 essential sources per news section; do not dump every visited URL into the newspaper. "
         "If there is no verified update, explicitly say so; do not present evergreen content as breaking news. "
-        "Each section has hard physical region dimensions and a conservative word budget. Headline, text, tables, sources and images ALL share this space. "
-        "Word budgets are hard maximums, not targets: aim for 65% to leave room for headings and citations. "
-        "Keep headline to roughly 5–8 words; reduce prose significantly for calendars, tables or graphics. Use short paragraphs and meaningful editorial hierarchy. "
-        "For one-space sections, use at most three short paragraphs or four list items, and avoid extra subheadings. "
+        "Produce a rich, fully developed print newspaper, not sparse executive summaries. "
+        "Each section has measured space and a target_words budget that already reserves room for its headline and citations. "
+        "For prose sections aim for target_words, normally between minimum_words and words. Do NOT apply another safety discount. "
+        "Fill the assigned columns with substantive reporting, explanation, concrete examples and useful implications, not filler or repetition. "
+        "For news, develop the verified stories with sourced background and clearly distinguished analysis; never invent extra news to fill space. "
+        "For lessons, include a worked example and practical application or exercise. Concise means precise sentences, not an abbreviated article. "
+        "Use 3–6 substantial paragraphs and 1–2 useful subheads in multi-space prose sections. "
+        "One-space prose sections should still be complete articles near their target budget. "
+        "Respect explicit user length limits. Image and calendar sections use their space visually, so they do not need a full prose word count. "
+        "Keep headlines to roughly 5–10 words. Use meaningful editorial hierarchy. "
         "A calendar must have exactly seven ordered days, Monday through Sunday. Default to the edition week. "
         "If the user explicitly requests a dated week, use that week instead and put its dates in the headline. "
         "Today is highlighted only if actually in that week. Only include events explicitly supplied in the prompt. "
@@ -547,7 +553,7 @@ def demo_issue(settings=None, day=None):
             blocks = [
                 {
                     "type": "paragraph",
-                    "text": "Illustrative preview. Your prompt shapes this space with fresh, useful content in each daily edition. The editor works within its assigned area, keeping headlines concise and the body easy to follow. Describe what matters to you: a news briefing, a lesson, a weekly plan, or an idea worth exploring.",
+                    "text": "Illustrative preview. Your prompt shapes this space with fresh, useful content in each daily edition. The editor works within its assigned area, keeping headlines concise and the body easy to follow. Describe what matters to you: a news briefing, a lesson, a weekly plan, or an idea worth exploring. A developed article explains the background as well as the headline. It connects causes with consequences and gives readers a concrete example to remember. Sources should support the reporting, while analysis makes clear what is known and what remains uncertain. This sample demonstrates the printed layout; it is not a report of today's events.",
                 }
             ]
         stories.append(
@@ -693,7 +699,7 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
         return [paragraph("• " + item, settings) for item in block["items"]]
     if kind == "calendar":
         flows = []
-        size = min(8, settings["body_size"])
+        size = min(8 if settings.get("_compact_blocks") else 10, settings["body_size"])
         for d in block["days"]:
             label = date.fromisoformat(d["date"]).strftime("%a %d")
             label += " · TODAY" if d["date"] == day else ""
@@ -745,6 +751,19 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
                 flow.setStyle(TableStyle(commands))
                 flow._after_space = 0
             flows.append(flow)
+        if max_height and not settings.get("_compact_blocks"):
+            measured = sum(f.wrap(width, A4[1])[1] for f in flows)
+            extra = min(5, max(0, (max_height - measured - 3) / max(1, 2 * len(flows))))
+            if extra:
+                for flow in flows:
+                    flow.setStyle(
+                        TableStyle(
+                            [
+                                ("TOPPADDING", (0, 0), (-1, -1), 2 + extra),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 2 + extra),
+                            ]
+                        )
+                    )
         return flows
     if kind == "table" and settings.get("_compact_blocks"):
         # A responsive record layout, preserving every heading and cell. Unlike
@@ -801,11 +820,15 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
             )
         caption = paragraph(block["caption"] + " · AI illustration", settings, size=7)
         caption_height = caption.wrap(width, A4[1])[1]
-        edge = min(width, 110, max(24, (max_height or 1000) - caption_height - 8))
-        return [
-            Image(BytesIO(base64.b64decode(image_data)), width=edge, height=edge),
-            caption,
-        ]
+        graphic = Image(BytesIO(base64.b64decode(image_data)))
+        available = max(
+            24,
+            (max_height or width) - caption_height - settings["body_size"] * 0.65 - 2,
+        )
+        scale = min(width / graphic.imageWidth, available / graphic.imageHeight)
+        graphic.drawWidth = graphic.imageWidth * scale
+        graphic.drawHeight = graphic.imageHeight * scale
+        return [graphic, caption]
     raise ValueError("Unsupported content block: " + kind)
 
 
@@ -814,7 +837,8 @@ def compose_regions(settings, issue):
     overrides = {}
     for stage in range(4):
         try:
-            return _compose_regions(settings, issue, overrides)
+            result = _compose_regions(settings, issue, overrides)
+            return _open_sparse_type(settings, issue, overrides, result)
         except FitError as error:
             if stage == 3:
                 raise
@@ -844,6 +868,44 @@ def compose_regions(settings, issue):
                 overrides[section["id"]] = style
 
 
+def _open_sparse_type(settings, issue, overrides, result):
+    """Use modestly larger readable type in sparse articles, never extra filler."""
+    regions, placements = result
+    sparse = []
+    for section in issue["sections"]:
+        sid = section["id"]
+        own = [r for r in regions if r.section_id == sid]
+        if (
+            sid in overrides
+            or len(own) != 1
+            or any(
+                b["type"] not in ("paragraph", "heading", "list")
+                for b in section["blocks"]
+            )
+        ):
+            continue
+        r = own[0]
+        bottom = min(y for region, _, _, y, _ in placements if region == r)
+        coverage = (r.y + r.height - bottom) / r.height
+        if coverage < 0.72 and settings["body_size"] < 11:
+            sparse.append(sid)
+    if not sparse:
+        return result
+    for increment in (1, 2):
+        trial = deepcopy(overrides)
+        for sid in sparse:
+            trial[sid] = {
+                "body_size": min(11, settings["body_size"] + increment),
+                "headline_size": min(24, settings["headline_size"] + increment * 2),
+            }
+        try:
+            candidate = _compose_regions(settings, issue, trial)
+        except FitError:
+            break
+        result = candidate
+    return result
+
+
 def _compose_regions(settings, issue, overrides):
     """Measure and split paragraphs across assigned regions, without drawing or dropping."""
     regions = allocate(settings)
@@ -866,7 +928,7 @@ def _compose_regions(settings, issue, overrides):
             if typ == "block":
                 index, block = value
                 max_height = y - bottom
-                if block["type"] in ("chart", "illustration") and pending:
+                if block["type"] in ("chart", "illustration", "calendar") and pending:
                     # Reserve measured space for what follows, not just the current
                     # graphic. Otherwise an immutable image can crowd out a planner
                     # and prose shortening has no way to recover that lost height.

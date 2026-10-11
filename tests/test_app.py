@@ -99,7 +99,7 @@ def test_dense_week_preview_refits_cached_edition_without_api_calls():
     ]
     test.run(timeout=20)
     assert not test.exception and not test.error
-    assert test.session_state["render_signature"].startswith("2026.10.11-source-ids:")
+    assert test.session_state["render_signature"].startswith("2026.10.11-full-pages:")
     reader = PdfReader(BytesIO(test.session_state["pdf"]))
     assert len(reader.pages) == 2
     text = "\n".join(p.extract_text() for p in reader.pages)
