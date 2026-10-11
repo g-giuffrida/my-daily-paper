@@ -18,7 +18,23 @@ const status=document.getElementById('status'),printButton=document.getElementBy
 const height=()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)});
 function select(value){selected=value;['front','back','both'].forEach(id=>document.getElementById(id).classList.toggle('active',id===value));[...document.getElementById('sheets').children].forEach((el,i)=>el.style.display=value==='both'||i===(value==='front'?0:1)?'block':'none');requestAnimationFrame(height)}
 ['front','back','both'].forEach(id=>document.getElementById(id).onclick=()=>select(id));
-printButton.onclick=()=>{if(!printReady)return;status.textContent='Print at actual size on A4; select two-sided / flip on long edge. If embedded printing is blocked, download the PDF and print it.';window.focus();window.print();height()};
+printButton.onclick=()=>{
+ if(!printReady)return;
+ // Print an isolated document, never the Streamlit page or its nested iframe.
+ // The 1 mm rounding allowance prevents Chrome/Safari adding blank overflow pages.
+ const popup=window.open('','_blank');
+ if(!popup){status.textContent='Allow the print window, or download the two-page PDF and print it.';height();return}
+ const d=popup.document;
+ d.open();d.write('<!doctype html><html><head><meta charset="utf-8"><title>Newspaper</title><style>@page{size:A4 portrait;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:white}body{width:210mm}.page{display:block;width:210mm;height:296mm;margin:0;padding:0;break-inside:avoid;break-after:page;overflow:hidden}.page:last-child{break-after:auto}img{display:block;width:100%;height:100%;object-fit:contain}@media screen{body{margin:auto}.page{margin-bottom:8px;box-shadow:0 0 4px #aaa}}</style></head><body></body></html>');d.close();
+ d.title='Newspaper '+args.day;
+ const pending=[...document.querySelectorAll('#print-sheets canvas')].map(canvas=>new Promise((resolve,reject)=>{
+   const page=d.createElement('div');page.className='page';
+   const image=d.createElement('img');image.alt='Newspaper page';image.onload=resolve;image.onerror=()=>reject(new Error('Print image unavailable'));
+   image.src=canvas.toDataURL('image/png');page.append(image);d.body.append(page);
+ }));
+ Promise.all(pending).then(()=>{popup.focus();popup.print()}).catch(()=>{popup.close();status.textContent='Print preparation failed. Download the two-page PDF to print it.';height()});
+ status.textContent='Two-page print window opened. Choose A4, two-sided / flip on long edge. Close the print window when finished.';height();
+};
 window.addEventListener('message',async event=>{
  if(event.source!==parent||event.data.type!=='streamlit:render')return;
  args=event.data.args;printButton.textContent=args.sample?'Print sample newspaper':(args.is_today?'Print today’s newspaper':'Print edition '+args.day);

@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}body{margin:0;color:#263333;font:13px system-ui;background:transparent}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}select,button{font:inherit;padding:8px;border:1px solid #bbc5c2;border-radius:5px;background:white;color:inherit}select{flex:1;min-width:150px}button{cursor:pointer}
+.pages{display:grid;grid-template-columns:1fr 1fr;gap:12px}.page{background:#fff;border:1px solid #bbc0b9;box-shadow:0 2px 5px #0001;padding:8px}.side{font-size:10px;letter-spacing:.15em;margin-bottom:8px;text-transform:uppercase}.masthead{height:40px;font:700 15px Georgia;text-align:center;border-top:2px solid #333;border-bottom:3px double #333;margin-bottom:7px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(3,72px);gap:4px}.back .grid{grid-template-rows:repeat(3,88px)}.cell{min-width:0;overflow:hidden;text-align:left;border:1px dashed #b8c2bc;border-radius:2px;padding:6px;font-size:11px;position:relative;line-height:1.25;background:#fafbf8}.cell.occupied{border-style:solid;cursor:grab}.cell.selected{outline:2px solid #254f51;outline-offset:-2px}.cell.over{outline:3px solid #b48837;background:#fff7df!important}.cell span{display:block;font-size:9px;opacity:.65;margin-top:5px}.hint{font-size:11px;color:#63706a;line-height:1.4;margin:10px 0}button:focus-visible,select:focus-visible{outline:3px solid #b48837}#status{min-height:17px;font-size:11px;color:#426466}
+</style></head><body>
+<div class="toolbar"><select id="section" aria-label="Section to place"></select><button id="rotate" type="button">↕ Make vertical</button><button id="auto" type="button">Auto arrange</button></div>
+<div class="pages" id="pages"></div><p class="hint">Drag a section onto either page. Or select a section above, then click a cell. Neighbours reflow automatically; nothing overlaps. Unassigned spaces remain empty.</p><div id="status" role="status"></div>
+<script>
+const send=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
+let sections=[],selected='',paperName='',dragging='';
+const picker=document.getElementById('section'),palette=['#e8eeea','#f3ede1','#e5ebf1','#efe5e2','#eae5ef','#ecebdc'];
+function event(action,extra={}){send('streamlit:setComponentValue',{value:{action,section_id:selected,event_id:crypto.randomUUID(),...extra},dataType:'json'})}
+function render(){
+ picker.replaceChildren();sections.forEach(s=>{const o=document.createElement('option');o.value=s.id;o.textContent=(s.name||'Untitled section')+' · '+s.spaces+' spaces';picker.append(o)});picker.value=selected;
+ const chosen=sections.find(s=>s.id===selected);document.getElementById('rotate').textContent=chosen?.orientation==='Vertical'?'↔ Make horizontal':'↕ Make vertical';
+ const pages=document.getElementById('pages');pages.replaceChildren();
+ for(let p=0;p<2;p++){
+  const page=document.createElement('section');page.className='page '+(p?'back':'front');const title=document.createElement('div');title.className='side';title.textContent=p?'Back · page 2':'Front · page 1';page.append(title);
+  if(!p){const mast=document.createElement('div');mast.className='masthead';mast.textContent=paperName;page.append(mast)}
+  const grid=document.createElement('div');grid.className='grid';
+  for(let n=p*6;n<p*6+6;n++){
+   const s=sections.find(s=>(s.cells||[]).includes(n)),cell=document.createElement('button');cell.type='button';cell.className='cell'+(s?' occupied':'')+(s?.id===selected?' selected':'');
+   cell.textContent=s?(s.name||'Untitled section'):'Empty';cell.setAttribute('aria-label',(p?'Back':'Front')+' row '+(Math.floor(n%6/2)+1)+' '+(n%2?'right':'left')+': '+(s?.name||'empty'));
+   const note=document.createElement('span');note.textContent=s?(s.orientation==='Vertical'?'↕ Vertical':'↔ Horizontal'):'Drop here';cell.append(note);
+   if(s){cell.style.background=palette[sections.indexOf(s)%palette.length];cell.draggable=true;cell.ondragstart=e=>{dragging=s.id;selected=s.id;e.dataTransfer.setData('text/plain',s.id);e.dataTransfer.effectAllowed='move'};cell.ondragend=()=>{dragging='';document.querySelectorAll('.over').forEach(c=>c.classList.remove('over'))}}
+   cell.ondragover=e=>{e.preventDefault();cell.classList.add('over')};cell.ondragleave=()=>cell.classList.remove('over');
+   cell.ondrop=e=>{e.preventDefault();cell.classList.remove('over');const sid=dragging||e.dataTransfer.getData('text/plain');if(sections.some(s=>s.id===sid)){selected=sid;event('place',{cell:n})}};
+   cell.onclick=()=>{if(selected)event('place',{cell:n})};grid.append(cell);
+  }page.append(grid);pages.append(page);
+ }
+ send('streamlit:setFrameHeight',{height:document.documentElement.scrollHeight});
+}
+picker.onchange=()=>{selected=picker.value;render()};
+document.getElementById('rotate').onclick=()=>{if(selected)event('rotate')};document.getElementById('auto').onclick=()=>event('auto');
+window.addEventListener('message',e=>{if(e.source!==parent||e.data.type!=='streamlit:render')return;sections=e.data.args.sections||[];paperName=e.data.args.name||'Your newspaper';if(!sections.some(s=>s.id===selected))selected=sections[0]?.id||'';document.getElementById('status').textContent=e.data.args.warning||'';render()});
+send('streamlit:componentReady',{apiVersion:1});
+</script></body></html>

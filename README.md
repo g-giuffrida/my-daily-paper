@@ -24,9 +24,9 @@ A server-held key requires an app password. Keep secrets out of Git. For a priva
 
 ## Make your edition
 
-- **Content:** choose a newspaper title and subtitle. Add up to twelve sections, each with a name, freeform prompt and 1–12 spaces. Reorder using the arrows. Assign exactly twelve spaces before generating.
+- **Content:** choose a newspaper title and subtitle. Add up to twelve sections, each with a name, freeform prompt and space allocation. Use 1–12 spaces in total; filling all twelve is optional. Drag sections onto the two-page planner (or select a section and click a cell), and choose horizontal or vertical growth. Neighbours reflow without overlapping.
 - **Design:** choose a preset or customize fonts, sizes, colors, margins, spacing and dividers. Wide regions use readable newspaper text columns. Design changes retypeset existing content without paid generation calls.
-- **Editorial:** choose language, voice, region, timezone, source preferences and text/image models. Access to a selected model depends on your OpenAI account.
+- **Editorial:** choose language, voice, region, timezone, source preferences and text/image models. English is the default. Each section is drafted separately; its explicit language override or prompt can request another language without changing neighbouring articles. Access to a selected model depends on your OpenAI account.
 - **Generate today’s newspaper:** captures the current date in your timezone, researches time-sensitive requests and generates content sized for your layout. Calendars cover that edition’s Monday–Sunday and highlight its date. Prompt events are never treated as confirmed attendance.
 - **Print:** the preview shows the actual PDF, on either side or both. Use its print button, choose A4, actual size, duplex and flip on long edge in your system dialog. PDF download is available for browsers that block embedded printing. Printing does not regenerate content.
 
@@ -36,9 +36,9 @@ For a traditional broadsheet look, select **Design → Use classic broadsheet st
 
 News research and newspaper editing are separate stages. Each time-sensitive section gets its own web-search brief; the app builds a source catalog from the API's citation annotations and tool results. The editor selects only source IDs allowed by that section's strict output schema. It never writes citation URLs: the app inserts the exact original links, so URL-copying mismatches cannot block generation. Copy-fitting revisions cannot edit source metadata. If a search returns no verified sources, the app researches again once and asks the editor to report the absence of a verified update honestly. It does not invent news or substitute unrelated links. Publication dates remain empty when unknown. Source provenance does not independently verify every factual claim. Each researched section uses an API call before the composition call.
 
-The visible build label is `2026.10.11-full-pages-2`. If a deployed app shows an earlier build or no build label, it is not running this update; confirm its GitHub repository and `main` branch in the hosting settings, then redeploy/reboot it.
+The visible build label is `2026.10.11-newspaper-layout-3`. If a deployed app shows an earlier build or no build label, it is not running this update; confirm its GitHub repository and `main` branch in the hosting settings, then redeploy/reboot it.
 
-Prose now targets 95% of a measured capacity budget, rather than 65% of an already discounted budget. Research gathers enough background for developed articles; the editor is instructed to add substance, not filler or invented news. Sparse existing prose can use modestly larger type (up to 11 pt) after a successful fit check. Calendars use spare row height, and illustrations scale to the actual frame with their aspect ratio preserved. Regenerate an older edition for richer writing; design-only rerenders still make no API calls.
+Prose targets 95% of measured capacity. Research gathers enough background for developed articles; the editor is instructed to add substance, not filler or invented news. Sparse existing prose can use modestly larger type (up to 10.5 pt) after a successful fit check. Calendars remain ruled tables even in compact mode. Native charts and flow diagrams use measured vector drawing, not image generation. The masthead includes customizable side notes, a strapline and an optional inside index. Regenerate an older edition for richer writing; design-only rerenders still make no API calls.
 
 Settings and short summaries from the last thirty generated editions are saved automatically in **this browser’s local storage**. They survive app restarts on the same origin, but do not sync between devices. If storage is disabled or full, the app displays a warning. There are no accounts, no shared profiles, and no calendar connection. Prompts remain as entered until you edit them; update explicitly dated plans for a new week.
 
@@ -55,6 +55,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 node --test tests/storage.test.cjs
 python tools/verify_pdf.py work/preview --day 2026-10-10
+python tools/verify_editorial_pdf.py work/editorial-proof
 ```
 
 Tests cover all 2,048 ordered twelve-space allocations, PDF bounds and page count, fonts, continuations, overflow, timezone and week boundaries, structured blocks, configuration validation, source validation and mocked generation/retries. Inspect both PNGs produced by the verification script for visual quality. Live generation additionally needs a working OpenAI account; mocked tests make no paid requests.

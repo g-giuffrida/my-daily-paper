@@ -19,18 +19,60 @@ class Region:
     continuation: bool
 
 
+def assigned_cells(settings):
+    """Pack preferred positions first; collisions reflow, never overlap or lose cells."""
+    sections = settings["sections"]
+    total = sum(s["spaces"] for s in sections)
+    if not sections or not 1 <= total <= 12:
+        raise ValueError("Assign between one and twelve spaces.")
+    free, result = set(range(12)), {}
+    ordered = sorted(
+        enumerate(sections),
+        key=lambda pair: (
+            pair[1].get("anchor", -1) < 0,
+            -pair[1].get("placement_priority", 0),
+            pair[0],
+        ),
+    )
+    for _, section in ordered:
+        vertical = section.get("orientation", "Horizontal") == "Vertical"
+        traversal = (
+            [p * 6 + r * 2 + c for p in range(2) for c in range(2) for r in range(3)]
+            if vertical
+            else list(range(12))
+        )
+        anchor = section.get("anchor", -1)
+        if anchor in traversal:
+            start = traversal.index(anchor)
+            traversal = traversal[start:] + traversal[:start]
+        chosen = [c for c in traversal if c in free][: section["spaces"]]
+        result[section["id"]] = chosen
+        free.difference_update(chosen)
+    return result
+
+
+def move_to_cell(settings, sid, cell):
+    """A drag wins its destination; existing neighbours reflow around it."""
+    if type(cell) is not int or not 0 <= cell < 12:
+        raise ValueError("Choose a cell on the front or back page.")
+    if sid not in {s["id"] for s in settings["sections"]}:
+        raise ValueError("Unknown section.")
+    for section in settings["sections"]:
+        section["placement_priority"] = int(section["id"] == sid)
+        if section["id"] == sid:
+            section["anchor"] = cell
+
+
 def allocate(settings):
-    """Fill cells in reading order, partitioning each run into maximal rectangles."""
-    if sum(s["spaces"] for s in settings["sections"]) != 12:
-        raise ValueError("Exactly twelve spaces must be assigned.")
+    """Partition actual assigned cells into maximal rectangular print regions."""
+    assignments = assigned_cells(settings)
     w, h = A4
     margin = settings["margin_mm"] * mm
     gap = settings["gutter_mm"] * mm
     cellw = (w - 2 * margin - gap) / 2
-    result, cursor = [], 0
+    result = []
     for section in settings["sections"]:
-        assigned = set(range(cursor, cursor + section["spaces"]))
-        cursor += section["spaces"]
+        assigned = set(assignments[section["id"]])
         first = True
         while assigned:
             start = min(assigned)

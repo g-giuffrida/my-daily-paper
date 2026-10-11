@@ -29,6 +29,10 @@ DEFAULT = {
     "version": 2,
     "name": "The Morning Edition",
     "tagline": "A little more informed, every day.",
+    "edition_label": "THE DAILY BRIEFING",
+    "masthead_left": "Independent thinking\nA wider perspective",
+    "masthead_right": "News · Ideas · Culture\nOne sheet, every day",
+    "show_index": True,
     "region": "Switzerland",
     "timezone": "Europe/Zurich",
     "language": "English",
@@ -148,7 +152,16 @@ PRESETS = {
 
 
 def new_section():
-    return {"id": uuid4().hex, "name": "", "prompt": "", "spaces": 1}
+    return {
+        "id": uuid4().hex,
+        "name": "",
+        "prompt": "",
+        "spaces": 1,
+        "orientation": "Horizontal",
+        "anchor": -1,
+        "placement_priority": 0,
+        "language": "",
+    }
 
 
 def clean_settings(raw):
@@ -221,9 +234,21 @@ def clean_settings(raw):
                     "id": sid,
                     "name": str(item.get("name", ""))[:300],
                     "prompt": str(item.get("prompt", ""))[:12000],
-                    "spaces": spaces
-                    if type(spaces) is int and 1 <= spaces <= 12
-                    else 1,
+                    "spaces": (
+                        spaces if type(spaces) is int and 1 <= spaces <= 12 else 1
+                    ),
+                    "orientation": (
+                        "Vertical"
+                        if item.get("orientation") == "Vertical"
+                        else "Horizontal"
+                    ),
+                    "anchor": (
+                        item.get("anchor")
+                        if type(item.get("anchor")) is int and -1 <= item["anchor"] < 12
+                        else -1
+                    ),
+                    "placement_priority": int(item.get("placement_priority") == 1),
+                    "language": str(item.get("language", ""))[:100],
                 }
             )
         out["sections"] = sections
@@ -238,8 +263,8 @@ def settings_errors(settings):
     if not 1 <= len(settings["sections"]) <= 12:
         errors.append("Add between one and twelve sections.")
     total = sum(s["spaces"] for s in settings["sections"])
-    if total != 12:
-        errors.append(f"Assign exactly 12 spaces (currently {total}).")
+    if not 1 <= total <= 12:
+        errors.append(f"Assign between 1 and 12 spaces (currently {total}).")
     for i, s in enumerate(settings["sections"], 1):
         if not s["name"].strip() or not s["prompt"].strip():
             errors.append(f"Section {i} needs a name and a prompt.")

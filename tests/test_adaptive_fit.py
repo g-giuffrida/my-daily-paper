@@ -128,7 +128,7 @@ def test_week_overflow_is_fixed_without_paid_revisions_or_mutating_issue():
 
     def create(**kwargs):
         calls.append(kwargs)
-        return FakeResponse(issue, ["https://example.org/researched"])
+        return FakeResponse(issue, ["https://example.org/researched"]).scoped(kwargs)
 
     result = generate_issue(
         settings,
@@ -136,7 +136,7 @@ def test_week_overflow_is_fixed_without_paid_revisions_or_mutating_issue():
         DAY,
         client=SimpleNamespace(responses=SimpleNamespace(create=create)),
     )
-    assert len(calls) == 1
+    assert len(calls) == len(settings["sections"])
     assert result["sections"] == original["sections"]
     assert_fitted(
         settings, result, [f"Event{d}{e}" for d in range(7) for e in range(4)]
@@ -221,18 +221,16 @@ def test_shortening_keeps_original_calendar_and_sources_even_if_model_changes_th
     revised["sections"][0]["blocks"][1]["days"][0]["events"] = ["Invented attendance"]
     revised["sections"][0]["sources"][0]["url"] = "https://example.org/unverified"
     replies = iter(
-        [
-            FakeResponse(issue, ["https://example.org/verified"]),
-            FakeResponse(issue, ["https://example.org/verified"]),
-            FakeResponse(revised, draft=False),
-        ]
+        [FakeResponse(issue, ["https://example.org/verified"])]
+        * (1 + len(settings["sections"]))
+        + [FakeResponse(revised, draft=False)]
     )
     result = generate_issue(
         settings,
         "unused",
         DAY,
         client=SimpleNamespace(
-            responses=SimpleNamespace(create=lambda **kw: next(replies))
+            responses=SimpleNamespace(create=lambda **kw: next(replies).scoped(kw))
         ),
     )
     assert result["sections"][0]["sources"] == section["sources"]
@@ -306,9 +304,12 @@ def test_shortening_remaps_illustration_when_prose_blocks_are_removed():
     revised["sections"][0]["blocks"] = [
         {"type": "paragraph", "text": "Short reporting."}
     ]
-    replies = iter([FakeResponse(issue), FakeResponse(revised, draft=False)])
+    replies = iter(
+        [FakeResponse(issue)] * len(settings["sections"])
+        + [FakeResponse(revised, draft=False)]
+    )
     client = SimpleNamespace(
-        responses=SimpleNamespace(create=lambda **kw: next(replies)),
+        responses=SimpleNamespace(create=lambda **kw: next(replies).scoped(kw)),
         images=SimpleNamespace(
             generate=lambda **kw: SimpleNamespace(
                 data=[SimpleNamespace(b64_json=encoded)]

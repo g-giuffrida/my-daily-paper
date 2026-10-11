@@ -61,6 +61,8 @@ def client_fixture(settings, day=DAY, empty=False):
             sections = {}
             schema = payload["text"]["format"]["schema"]
             for section in demo_issue(settings, day)["sections"]:
+                if section["id"] not in schema["properties"]["sections"]["properties"]:
+                    continue
                 fields = schema["properties"]["sections"]["properties"][section["id"]][
                     "properties"
                 ]
@@ -148,8 +150,8 @@ def test_real_sdk_serialization_research_to_two_page_pdf(model):
     client, calls = client_fixture(settings)
     issue = generate_issue(settings, "unused", DAY, client=client)
     assert (
-        len(calls) == 3
-    )  # two independent researches, one composition, no citation retries
+        len(calls) == 6
+    )  # two researches, four isolated copy desks, no citation retries
     assert all(c["tool_choice"] == "required" for c in calls[:2])
     assert "tools" not in calls[-1]
     for section in issue["sections"]:
@@ -169,7 +171,7 @@ def test_empty_search_is_researched_again_and_reported_honestly_not_a_citation_e
     settings = configuration_with_news()
     client, calls = client_fixture(settings, empty=True)
     issue = generate_issue(settings, "unused", DAY, client=client)
-    assert len(calls) == 5
+    assert len(calls) == 8
     assert not any(s["sources"] for s in issue["sections"])
     for i in [0, 3]:
         assert "No verified update" in issue["sections"][i]["blocks"][0]["text"]
@@ -311,8 +313,8 @@ def test_generate_button_completes_researched_edition_and_history(monkeypatch):
         b for b in test.button if b.label == "✦ Generate today’s newspaper"
     ).click().run(timeout=30)
     assert not test.exception and not test.error
-    assert len(calls) == 3
+    assert len(calls) == 6
     assert test.session_state["edition"]["day"] == day
     assert test.session_state["history"][-1]["day"] == day
     assert len(PdfReader(BytesIO(test.session_state["pdf"])).pages) == 2
-    assert any("2026.10.11-full-pages-2" in c.value for c in test.caption)
+    assert any("2026.10.11-newspaper-layout-3" in c.value for c in test.caption)

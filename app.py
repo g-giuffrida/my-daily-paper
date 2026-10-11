@@ -11,6 +11,7 @@ from zoneinfo import available_timezones
 import streamlit as st
 import streamlit.components.v1 as components
 from engine import FitError, demo_issue, edition_day, generate_issue, render_pdf
+from layout import assigned_cells, move_to_cell
 from settings import (
     DEFAULT,
     FONTS,
@@ -24,12 +25,15 @@ from settings import (
 )
 
 ROOT = Path(__file__).resolve().parent
-BUILD_VERSION = "2026.10.11-full-pages-2"
+BUILD_VERSION = "2026.10.11-newspaper-layout-3"
 storage = components.declare_component(
     "paper_storage", path=str(ROOT / "components" / "storage")
 )
 viewer = components.declare_component(
     "paper_viewer", path=str(ROOT / "components" / "viewer")
+)
+layout_editor = components.declare_component(
+    "paper_layout", path=str(ROOT / "components" / "layout")
 )
 st.set_page_config(
     page_title="My Daily Paper",
@@ -171,21 +175,70 @@ with left:
         st.progress(min(total / 12, 1))
         if total != 12:
             st.caption(
-                f"{12 - total} spaces remaining."
+                f"{12 - total} spaces available. You can generate now without filling every space."
                 if total < 12
                 else f"Remove {total - 12} allocated spaces before generating."
             )
+        cell_map = (
+            assigned_cells(st.session_state.settings)
+            if sections and 0 < total <= 12
+            else {}
+        )
+        placement = layout_editor(
+            name=st.session_state.settings["name"],
+            sections=[{**s, "cells": cell_map.get(s["id"], [])} for s in sections],
+            warning=(
+                "Reduce the allocation to 12 spaces before arranging."
+                if total > 12
+                else ""
+            ),
+            key="page_arrangement",
+            default=None,
+        )
+        if isinstance(placement, dict) and placement.get(
+            "event_id"
+        ) != st.session_state.get("layout_event"):
+            st.session_state.layout_event = placement.get("event_id")
+            sid, action = placement.get("section_id"), placement.get("action")
+            selected = next((s for s in sections if s["id"] == sid), None)
+            if (
+                action == "place"
+                and selected
+                and type(placement.get("cell")) is int
+                and 0 <= placement["cell"] < 12
+            ):
+                move_to_cell(st.session_state.settings, sid, placement["cell"])
+                st.rerun()
+            elif action == "rotate" and selected:
+                selected["orientation"] = (
+                    "Horizontal"
+                    if selected.get("orientation") == "Vertical"
+                    else "Vertical"
+                )
+                st.session_state[f"section_{sid}_orientation"] = selected["orientation"]
+                st.rerun()
+            elif action == "auto":
+                for s in sections:
+                    s.update(anchor=-1, placement_priority=0)
+                st.rerun()
         for i, section in enumerate(sections):
             sid = section["id"]
-            with st.container(border=True):
+            with st.expander(
+                f"{i + 1}. {section['name'] or 'New section'} · {section['spaces']} spaces",
+                expanded=not section["prompt"],
+            ):
                 for field, label, method in [
                     ("name", "Section name", st.text_input),
                     ("prompt", "What should appear here?", st.text_area),
                     ("spaces", "Spaces", st.selectbox),
+                    ("orientation", "Grow section", st.selectbox),
+                    ("language", "Section language override (optional)", st.text_input),
                 ]:
                     key = f"section_{sid}_{field}"
                     if key not in st.session_state:
-                        st.session_state[key] = section[field]
+                        st.session_state[key] = section.get(
+                            field, "Horizontal" if field == "orientation" else ""
+                        )
                     extras = (
                         {
                             "height": 100,
@@ -196,6 +249,12 @@ with left:
                     )
                     if field == "spaces":
                         extras["options"] = list(range(1, 13))
+                    if field == "orientation":
+                        extras["options"] = ["Horizontal", "Vertical"]
+                    if field == "language":
+                        extras["help"] = (
+                            "Leave blank to follow this section's explicit language request, otherwise the Editorial language. A German lesson does not change other articles."
+                        )
                     method(
                         label,
                         key=key,
@@ -236,7 +295,7 @@ with left:
             use_container_width=True,
         )
         st.caption(
-            "Placement follows section order: left to right, top to bottom, front then back. Settings are remembered in this browser automatically."
+            "Drag sections in the page plan to change their placement. Use the arrows to change editorial order. Settings are remembered in this browser automatically."
         )
     with design:
         st.selectbox(
@@ -247,6 +306,11 @@ with left:
             on_click=use_classic_style,
             help="Blackletter masthead, serif headlines, justified columns and fine black rules. Keeps your content and prompts.",
         )
+        with st.expander("Masthead & edition furniture", expanded=True):
+            control(st.text_input, "Edition strapline", "edition_label")
+            control(st.text_area, "Left masthead note", "masthead_left", height=68)
+            control(st.text_area, "Right masthead note", "masthead_right", height=68)
+            control(st.toggle, "Show inside-this-edition index", "show_index")
         control(
             st.selectbox, "Masthead font", "masthead_font", ["UnifrakturCook"] + FONTS
         )
@@ -345,7 +409,14 @@ if generate or sample:
                 pdf = render_pdf(settings, issue)
                 st.session_state.edition = issue
                 st.session_state.generated_structure = [
-                    (s["id"], s["name"], s["prompt"]) for s in settings["sections"]
+                    (
+                        s["id"],
+                        s["name"],
+                        s["prompt"],
+                        s.get("language", ""),
+                        settings["language"],
+                    )
+                    for s in settings["sections"]
                 ]
                 st.session_state.pdf = pdf
                 st.session_state.render_signature = pdf_signature(settings)
@@ -378,14 +449,25 @@ with right:
     if issue is None and not errors:
         issue = demo_issue(settings)
     if issue is None:
-        st.info("Assign twelve spaces to preview both sides of your newspaper.")
+        st.info(
+            "Add at least one section to preview your newspaper. You do not need to fill all twelve spaces."
+        )
     else:
-        structure = [(s["id"], s["name"], s["prompt"]) for s in settings["sections"]]
+        structure = [
+            (
+                s["id"],
+                s["name"],
+                s["prompt"],
+                s.get("language", ""),
+                settings["language"],
+            )
+            for s in settings["sections"]
+        ]
         if not issue.get("sample") and structure != st.session_state.get(
             "generated_structure"
         ):
             st.warning(
-                "Your content prompts or section order changed. Generate a new edition to apply them."
+                "Your content prompts, language or section order changed. Generate a new edition to apply them."
             )
         if not issue.get("sample") and issue["day"] != edition_day(settings):
             st.warning(
@@ -394,7 +476,7 @@ with right:
         try:
             if errors:
                 raise ValueError(
-                    "Complete the twelve-space allocation to update the preview."
+                    "Update the section settings to preview: " + "; ".join(errors)
                 )
             if issue.get("sample"):
                 issue = demo_issue(settings)

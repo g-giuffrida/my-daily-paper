@@ -242,7 +242,8 @@ def test_whitelist_storage_and_history():
         "api_key" not in h and len(h["sections"]["lesson"]) == 400
         for h in clean_history([{"day": DAY, "sections": {"lesson": "x" * 1000}}])
     )
-    assert settings_errors(configuration([11]))
+    assert not settings_errors(configuration([11]))
+    assert settings_errors(configuration([12, 1]))
 
 
 class FakeResponse:
@@ -267,6 +268,18 @@ class FakeResponse:
         self.output_text = json.dumps({"sections": sections})
         self.urls = urls
 
+    def scoped(self, request):
+        if "tools" in request:
+            return self
+        result = deepcopy(self)
+        ids = request["text"]["format"]["schema"]["properties"]["sections"][
+            "properties"
+        ]
+        data = json.loads(result.output_text)
+        data["sections"] = {k: v for k, v in data["sections"].items() if k in ids}
+        result.output_text = json.dumps(data)
+        return result
+
     def model_dump(self):
         return {
             "output": [
@@ -284,11 +297,11 @@ def test_generation_captures_day_history_and_bounded_repair():
     issue["sections"][0]["blocks"][0]["text"] = "Overlong material. " * 900
     good = demo_issue(s, DAY)
     calls = []
-    replies = iter([FakeResponse(issue), FakeResponse(good, draft=False)])
+    replies = iter([FakeResponse(issue)] * 12 + [FakeResponse(good, draft=False)])
 
     def create(**kwargs):
         calls.append(kwargs)
-        return next(replies)
+        return next(replies).scoped(kwargs)
 
     result = generate_issue(
         s,
@@ -298,12 +311,12 @@ def test_generation_captures_day_history_and_bounded_repair():
         client=SimpleNamespace(responses=SimpleNamespace(create=create)),
     )
     assert result["day"] == DAY and not result["sample"]
-    assert len(calls) == 2
+    assert len(calls) == 13
     assert "Old lesson" in calls[0]["input"][0]["content"]
     assert DAY in calls[0]["input"][0]["content"]
     replies = iter(
-        [
-            FakeResponse(issue),
+        [FakeResponse(issue)] * 12
+        + [
             FakeResponse(issue, draft=False),
             FakeResponse(issue, draft=False),
         ]
@@ -314,7 +327,7 @@ def test_generation_captures_day_history_and_bounded_repair():
             "unused",
             DAY,
             client=SimpleNamespace(
-                responses=SimpleNamespace(create=lambda **kw: next(replies))
+                responses=SimpleNamespace(create=lambda **kw: next(replies).scoped(kw))
             ),
         )
 
@@ -404,11 +417,13 @@ def test_research_and_editing_do_not_ask_model_to_copy_urls():
     calls = []
     research = FakeResponse(demo_issue(s, DAY), ["https://example.org/new-research"])
     research.output_text = "Verified reporting with publication date " + DAY
-    replies = iter([research, FakeResponse(good, ["https://example.org/new-research"])])
+    replies = iter(
+        [research] + [FakeResponse(good, ["https://example.org/new-research"])] * 6
+    )
 
     def create(**kwargs):
         calls.append(kwargs)
-        return next(replies)
+        return next(replies).scoped(kwargs)
 
     result = generate_issue(
         s,
@@ -419,7 +434,7 @@ def test_research_and_editing_do_not_ask_model_to_copy_urls():
     assert (
         result["sections"][0]["sources"][0]["url"] == "https://example.org/new-research"
     )
-    assert len(calls) == 2 and calls[0]["tool_choice"] == "required"
+    assert len(calls) == 7 and calls[0]["tool_choice"] == "required"
     assert "tools" not in calls[1]
     fields = calls[1]["text"]["format"]["schema"]["properties"]["sections"][
         "properties"
@@ -488,7 +503,9 @@ def test_illustration_generation_and_pdf_embedding():
         "unused",
         DAY,
         client=SimpleNamespace(
-            responses=SimpleNamespace(create=lambda **kw: FakeResponse(issue)),
+            responses=SimpleNamespace(
+                create=lambda **kw: FakeResponse(issue).scoped(kw)
+            ),
             images=SimpleNamespace(generate=images),
         ),
     )
