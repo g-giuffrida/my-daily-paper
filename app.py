@@ -24,7 +24,7 @@ from settings import (
 )
 
 ROOT = Path(__file__).resolve().parent
-BUILD_VERSION = "2026.10.11-full-pages"
+BUILD_VERSION = "2026.10.11-full-pages-2"
 storage = components.declare_component(
     "paper_storage", path=str(ROOT / "components" / "storage")
 )

@@ -1,12 +1,15 @@
 from copy import deepcopy
 from io import BytesIO
 import base64
+import jsonschema
+import pytest
 
 from PIL import Image
 from pypdf import PdfReader
 from reportlab.lib.pagesizes import A4
 
 from engine import (
+    BLOCK_SCHEMA,
     block_flowables,
     compose_regions,
     demo_issue,
@@ -109,3 +112,18 @@ def test_calendar_uses_spare_height_but_does_not_add_events():
     )
     assert sum(f.wrap(500, 500)[1] for f in full) <= 190
     assert block == original
+
+
+def test_calendar_schema_prevents_weekday_labels_in_machine_dates():
+    block = {
+        "type": "calendar",
+        "days": [{"date": d, "events": ["Office"]} for d in week_dates("2026-10-12")],
+    }
+    jsonschema.validate(block, BLOCK_SCHEMA)
+    block["days"][0]["date"] = "2026-10-12 · Montag"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(block, BLOCK_SCHEMA)
+    block["days"][0]["date"] = "2026-10-12"
+    block["days"].pop()
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(block, BLOCK_SCHEMA)

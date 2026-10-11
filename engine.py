@@ -113,7 +113,15 @@ def object_schema(properties):
 
 STR = {"type": "string"}
 STRINGS = {"type": "array", "items": STR}
-DAY_SCHEMA = object_schema({"date": STR, "events": STRINGS})
+DAY_SCHEMA = object_schema(
+    {
+        "date": {
+            "type": "string",
+            "pattern": r"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+        },
+        "events": STRINGS,
+    }
+)
 SOURCE_SCHEMA = object_schema({"publisher": STR, "url": STR, "published_at": STR})
 
 
@@ -129,7 +137,10 @@ BLOCK_SCHEMA = {
         block_schema(
             "table", {"columns": STRINGS, "rows": {"type": "array", "items": STRINGS}}
         ),
-        block_schema("calendar", {"days": {"type": "array", "items": DAY_SCHEMA}}),
+        block_schema(
+            "calendar",
+            {"days": {"type": "array", "items": DAY_SCHEMA, "minItems": 7, "maxItems": 7}},
+        ),
         block_schema(
             "chart",
             {
@@ -303,6 +314,7 @@ def editorial_instructions(settings, day, history):
         "Respect explicit user length limits. Image and calendar sections use their space visually, so they do not need a full prose word count. "
         "Keep headlines to roughly 5–10 words. Use meaningful editorial hierarchy. "
         "A calendar must have exactly seven ordered days, Monday through Sunday. Default to the edition week. "
+        "Each calendar date field must be YYYY-MM-DD only, without weekday names or other labels; the application formats the labels. "
         "If the user explicitly requests a dated week, use that week instead and put its dates in the headline. "
         "Today is highlighted only if actually in that week. Only include events explicitly supplied in the prompt. "
         "Do not claim earlier events were completed, do not add events or automatically roll explicitly dated events into another week. "
