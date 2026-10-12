@@ -4,36 +4,27 @@
 button{border:1px solid #b9c4c4;background:white;border-radius:6px;padding:9px 12px;cursor:pointer;color:#183c42}
 button.active,button.primary{background:#183c42;color:white;border-color:#183c42}button:disabled{opacity:.5;cursor:wait}
 .sheet{background:white;box-shadow:0 4px 18px #0002;margin:0 auto 18px;width:100%;border:1px solid #d2d2cc}
-canvas{display:block;width:100%;height:auto}#status{font-size:12px;color:#626b6a;margin:10px 0}.print-sheet{display:none}
-@media print{@page{size:A4 portrait;margin:0}body{background:white!important;margin:0!important}.toolbar,#status,#sheets{display:none!important}.print-sheet{display:block;width:210mm;height:297mm;break-after:page;page-break-after:always;overflow:hidden}.print-sheet:last-child{break-after:auto;page-break-after:auto}.print-sheet canvas{width:210mm;height:297mm}}
+canvas{display:block;width:100%;height:auto}#status{font-size:12px;color:#626b6a;margin:10px 0}
 </style></head><body>
 <div class="toolbar"><button id="front" class="active">Front</button><button id="back">Back</button><button id="both">Both sides</button><button id="print" class="primary" disabled>Print today’s newspaper</button></div>
-<div id="status" role="status">Loading exact PDF preview…</div><div id="sheets"></div><div id="print-sheets"></div>
+<div id="status" role="status">Loading exact PDF preview…</div><div id="sheets"></div>
 <script type="module">
 import * as pdfjsLib from './pdf.min.mjs';
+import {printPdfBlob} from './print.mjs';
 pdfjsLib.GlobalWorkerOptions.workerSrc=new URL('./pdf.worker.min.mjs',import.meta.url).href;
 const send=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
-let selected='front',signature='',revision=0,doc=null,args={},printReady=false;
+let selected='front',signature='',revision=0,doc=null,args={},printReady=false,printUrl='';
 const status=document.getElementById('status'),printButton=document.getElementById('print');
 const height=()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)});
 function select(value){selected=value;['front','back','both'].forEach(id=>document.getElementById(id).classList.toggle('active',id===value));[...document.getElementById('sheets').children].forEach((el,i)=>el.style.display=value==='both'||i===(value==='front'?0:1)?'block':'none');requestAnimationFrame(height)}
 ['front','back','both'].forEach(id=>document.getElementById(id).onclick=()=>select(id));
 printButton.onclick=()=>{
  if(!printReady)return;
- // Print an isolated document, never the Streamlit page or its nested iframe.
- // The 1 mm rounding allowance prevents Chrome/Safari adding blank overflow pages.
- const popup=window.open('','_blank');
+ // Open the original PDF bytes in the native PDF viewer. Never paginate HTML
+ // or rasterized copies: the print document is exactly the validated PDF.
+ const popup=window.open(printUrl,'_blank');
  if(!popup){status.textContent='Allow the print window, or download the two-page PDF and print it.';height();return}
- const d=popup.document;
- d.open();d.write('<!doctype html><html><head><meta charset="utf-8"><title>Newspaper</title><style>@page{size:A4 portrait;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:white}body{width:210mm}.page{display:block;width:210mm;height:296mm;margin:0;padding:0;break-inside:avoid;break-after:page;overflow:hidden}.page:last-child{break-after:auto}img{display:block;width:100%;height:100%;object-fit:contain}@media screen{body{margin:auto}.page{margin-bottom:8px;box-shadow:0 0 4px #aaa}}</style></head><body></body></html>');d.close();
- d.title='Newspaper '+args.day;
- const pending=[...document.querySelectorAll('#print-sheets canvas')].map(canvas=>new Promise((resolve,reject)=>{
-   const page=d.createElement('div');page.className='page';
-   const image=d.createElement('img');image.alt='Newspaper page';image.onload=resolve;image.onerror=()=>reject(new Error('Print image unavailable'));
-   image.src=canvas.toDataURL('image/png');page.append(image);d.body.append(page);
- }));
- Promise.all(pending).then(()=>{popup.focus();popup.print()}).catch(()=>{popup.close();status.textContent='Print preparation failed. Download the two-page PDF to print it.';height()});
- status.textContent='Two-page print window opened. Choose A4, two-sided / flip on long edge. Close the print window when finished.';height();
+ status.textContent='Original two-page PDF opened. Use its printer icon (or Cmd/Ctrl+P). Choose one copy, A4, one page per side, two-sided / flip on long edge for one sheet. Do not print this editor page.';height();
 };
 window.addEventListener('message',async event=>{
  if(event.source!==parent||event.data.type!=='streamlit:render')return;
@@ -46,10 +37,12 @@ window.addEventListener('message',async event=>{
   const loaded=await pdfjsLib.getDocument({data:bytes,isEvalSupported:false}).promise;
   if(current!==revision){await loaded.destroy();return}doc=loaded;
   if(doc.numPages!==2)throw new Error('Expected exactly two pages.');
-  const sheets=document.getElementById('sheets'),prints=document.getElementById('print-sheets');sheets.replaceChildren();prints.replaceChildren();
+  if(printUrl)URL.revokeObjectURL(printUrl);
+  printUrl=URL.createObjectURL(printPdfBlob(args.pdf));
+  const sheets=document.getElementById('sheets');sheets.replaceChildren();
   for(let n=1;n<=2;n++){
    const page=await doc.getPage(n);
-   for(const [container,scale,klass] of [[sheets,1.6,'sheet'],[prints,300/72,'print-sheet']]){
+   for(const [container,scale,klass] of [[sheets,1.6,'sheet']]){
     const viewport=page.getViewport({scale}),wrapper=document.createElement('div');wrapper.className=klass;
     const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.setAttribute('aria-label',n===1?'Front newspaper page':'Back newspaper page');wrapper.append(canvas);container.append(wrapper);
     await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;

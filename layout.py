@@ -110,12 +110,7 @@ def allocate(settings):
 
 
 def region_headline_size(settings, region):
-    if (
-        region.section_id == settings["sections"][0]["id"]
-        and not region.continuation
-        and len(region.cells) >= 2
-    ):
-        return min(26, settings["headline_size"] + 5)
+    # One headline scale across the edition, independent of cell allocation.
     return settings["headline_size"]
 
 

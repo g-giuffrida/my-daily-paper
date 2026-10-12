@@ -77,6 +77,13 @@ def client_fixture(settings, day=DAY, empty=False):
                         else []
                     ),
                 }
+                if "visual" in fields:
+                    sections[section["id"]]["visual"] = {
+                        "type": "diagram",
+                        "title": "Learning cycle",
+                        "steps": ["Read an example", "Practise"],
+                        "caption": "Illustrative learning method",
+                    }
                 if empty and needs_news(
                     next(
                         s["prompt"]
@@ -317,4 +324,4 @@ def test_generate_button_completes_researched_edition_and_history(monkeypatch):
     assert test.session_state["edition"]["day"] == day
     assert test.session_state["history"][-1]["day"] == day
     assert len(PdfReader(BytesIO(test.session_state["pdf"])).pages) == 2
-    assert any("2026.10.11-newspaper-layout-3" in c.value for c in test.caption)
+    assert any("2026.10.12-press-4" in c.value for c in test.caption)

@@ -56,7 +56,7 @@ def test_developed_sample_fills_most_of_front_regions_without_losing_copy():
     assert len(PdfReader(BytesIO(render_pdf(settings, issue))).pages) == 2
 
 
-def test_short_copy_gets_readable_type_not_invented_paragraphs():
+def test_short_copy_keeps_shared_type_not_invented_paragraphs():
     settings = configuration([2] * 6)
     issue = demo_issue(settings, "2026-10-11")
     issue["sections"][0]["blocks"] = [
@@ -72,7 +72,7 @@ def test_short_copy_gets_readable_type_not_invented_paragraphs():
         and hasattr(f, "getPlainText")
         and "OriginalReporting" in f.getPlainText()
     ]
-    assert all(9 < f.style.fontSize <= 11 for f in body)
+    assert all(f.style.fontSize == settings["body_size"] for f in body)
     assert issue == original
     text = " ".join(
         p.extract_text() for p in PdfReader(BytesIO(render_pdf(settings, issue))).pages
@@ -93,7 +93,7 @@ def test_comic_uses_available_frame_and_preserves_aspect_ratio():
         max_height=190,
     )
     image = flows[0]
-    assert abs(image.drawWidth - 250) < .001 and image.drawHeight > 110
+    assert abs(image.drawWidth - 250) < 0.001 and image.drawHeight > 110
     assert abs(image.drawWidth / image.drawHeight - 1.5) < 0.001
     assert sum(f.wrap(250, 500)[1] for f in flows) + DEFAULT["body_size"] * 0.65 <= 190
 

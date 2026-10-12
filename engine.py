@@ -184,7 +184,7 @@ SCHEMA = object_schema({"sections": {"type": "array", "items": SECTION_SCHEMA}})
 def wants_image(prompt):
     return bool(
         re.search(
-            r"\b(image|illustration|photo|photograph|picture|drawing|immagine|illustrazione|foto|bild|zeichnung)\b",
+            r"\b(image|illustration|photo|photograph|picture|drawing|comic|cartoon|karikatur|fumetto|immagine|illustrazione|foto|bild|zeichnung)\b",
             prompt,
             re.I,
         )
@@ -367,6 +367,30 @@ def editorial_instructions(settings, day, history, section_ids=None):
     )
 
 
+def visual_section_id(settings):
+    """Commission one real visual, respecting text-only requests and planner/image space."""
+    eligible = [
+        s
+        for s in settings["sections"]
+        if s["spaces"] >= 2
+        and not re.search(
+            r"calendar|planner|my week|wochenplan|settimana", s["prompt"], re.I
+        )
+        and not wants_image(s["prompt"])
+        and not re.search(
+            r"text.only|no (?:charts?|visuals?|diagrams?|tables?)", s["prompt"], re.I
+        )
+    ]
+    for pattern in (
+        r"\b(chart|diagram|visual|graph|table)\b",
+        r"explain|lesson|teach|how |learn",
+    ):
+        for s in eligible:
+            if re.search(pattern, s["prompt"], re.I):
+                return s["id"]
+    return None
+
+
 def generate_issue(settings, key, day, history=None, client=None):
     errors = settings_errors(settings)
     if errors:
@@ -387,6 +411,8 @@ def generate_issue(settings, key, day, history=None, client=None):
     # Isolated copy desks: a Swiss-German cartoon must not make an English
     # financial article German. Each draft sees only its own prompt and evidence.
     draft = {"sections": {}}
+    visual_id = visual_section_id(settings)
+    word_budgets = budgets(settings)
     import jsonschema
 
     for section in settings["sections"]:
@@ -394,7 +420,26 @@ def generate_issue(settings, key, day, history=None, client=None):
         local_settings = {**settings, "sections": [section]}
         evidence = {sid: research[sid]} if sid in research else {}
         schema = draft_schema(local_settings, evidence, SECTION_SCHEMA, object_schema)
-        response = client.responses.create(
+        visual_note = ""
+        if sid == visual_id:
+            fields = schema["properties"]["sections"]["properties"][sid]
+            fields["properties"]["visual"] = {
+                "anyOf": [
+                    deepcopy(b)
+                    for b in BLOCK_SCHEMA["anyOf"]
+                    if b["properties"]["type"]["enum"][0]
+                    in ("chart", "diagram", "table")
+                ]
+            }
+            fields["required"].append("visual")
+            visual_note = (
+                " This section has a commissioned visual: return it in the required visual field, not duplicated in blocks. "
+                "Use a concise 2-column comparison table (2–4 rows), a 2–4 step explanatory diagram, or a sourced numerical chart. "
+                "It must explain this article, not generic advice to the reader. Use only established facts from the brief or lesson. "
+                "If there are no verified numbers, use a qualitative comparison or mechanism; never invent figures. "
+                "Keep labels short and reserve about 35% of the section for the visual, using the other 65% for developed prose."
+            )
+        request = dict(
             model=settings["model"],
             input=[
                 {
@@ -411,7 +456,8 @@ def generate_issue(settings, key, day, history=None, client=None):
                     "Do not use outside current facts. Cite only IDs for sources that support the specific reporting. "
                     "If a news section has no verified sources, explain that no update was verified for this edition; "
                     "do not invent an update or cite another section's sources. Non-news sections need no external citations. "
-                    "Do not print source IDs or raw citation markers in article text.",
+                    "Do not print source IDs or raw citation markers in article text."
+                    + visual_note,
                 },
             ],
             text={
@@ -423,12 +469,66 @@ def generate_issue(settings, key, day, history=None, client=None):
                 }
             },
         )
+        response = client.responses.create(**request)
         if not response.output_text:
             raise ValueError(
                 "The editor returned no content. Try another model or regenerate."
             )
         piece = json.loads(response.output_text)
         jsonschema.validate(piece, schema)
+        # A short brief must not leave a large print frame empty. One bounded
+        # development pass uses the SAME evidence and typography budget.
+        content = piece["sections"][sid]
+        count = lambda data: sum(
+            len(b.get("text", "").split())
+            + sum(len(x.split()) for x in b.get("items", []))
+            for b in data["blocks"]
+        )
+        target = round(
+            word_budgets[sid]["target_words"] * (0.65 if sid == visual_id else 1)
+        )
+        prose_only = all(
+            b["type"] in ("paragraph", "heading", "list") for b in content["blocks"]
+        )
+        explicit_brief = re.search(
+            r"\b(short|brief|concise|weather)\b|\d+\s*words|calendar|planner",
+            section["prompt"],
+            re.I,
+        )
+        has_evidence = not needs_news(section["prompt"]) or bool(
+            research.get(sid, {}).get("sources")
+        )
+        if (
+            prose_only
+            and has_evidence
+            and not explicit_brief
+            and count(content) < target * 0.4
+        ):
+            expanded_request = deepcopy(request)
+            expanded_request["input"].append(
+                {
+                    "role": "user",
+                    "content": f"The draft is only {count(content)} words for a measured target of {target}. Develop it toward {target} words with specific explanations, examples, sourced background and implications. Do not invent facts, repeat yourself or add filler. Preserve the language, citations and any commissioned visual. If the evidence cannot support more detail, keep the uncertainty explicit. Existing draft: "
+                    + json.dumps(piece, ensure_ascii=False),
+                }
+            )
+            from openai import OpenAIError
+
+            try:
+                expanded = json.loads(
+                    client.responses.create(**expanded_request).output_text
+                )
+                jsonschema.validate(expanded, schema)
+                if count(expanded["sections"][sid]) > count(content):
+                    piece = expanded
+            except (OpenAIError, ValueError, jsonschema.ValidationError):
+                # Development is optional; a failed extra request must not lose
+                # an already valid, researched draft or trigger fabricated filler.
+                pass
+        if sid == visual_id:
+            content = piece["sections"][sid]
+            visual = content.pop("visual")
+            content["blocks"].insert(min(2, len(content["blocks"])), visual)
         draft["sections"].update(piece["sections"])
     issue = resolve_draft(draft, settings, research, day)
     searched = {
@@ -476,8 +576,8 @@ def generate_issue(settings, key, day, history=None, client=None):
                         "role": "user",
                         "content": "Shorten only sections with these IDs: "
                         + json.dumps(overflow_ids)
-                        + ". Rewrite the headline in at most 6 words and reduce prose by at least 60%, "
-                        "preserving facts and source attribution. Use the shortest useful wording. "
+                        + ". Rewrite the headline in at most 6 words and reduce prose by about 25%, "
+                        "preserving facts, language and source attribution. Keep a developed article, not a brief summary. "
                         "Do not output sources or source_refs in this copy-fitting pass. Preserve all calendar, table, chart and illustration blocks; the application "
                         "will keep those original data blocks regardless of your response. No calendar filler prose. "
                         "Return all sections. Existing issue: "
@@ -604,14 +704,9 @@ def demo_issue(settings=None, day=None):
                         for n, d in enumerate(week_dates(day))
                     ],
                 },
-                {"type": "heading", "text": "Keep the week in view"},
                 {
                     "type": "paragraph",
-                    "text": "This sample calendar is illustrative. Your real edition includes only the events you describe in your section prompt. The date of the edition is highlighted; earlier days are muted and upcoming days remain clear.",
-                },
-                {
-                    "type": "paragraph",
-                    "text": "Your weekly prompt is remembered automatically. Update it when your plans change, then generate a fresh newspaper each morning. A new edition highlights the new day without claiming that earlier plans were completed.",
+                    "text": "Illustrative plans only. Your real planner includes only supplied events; shading highlights today, not completion.",
                 },
             ]
         if s["spaces"] == 1:
@@ -826,6 +921,81 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
     if kind == "list":
         return [paragraph("• " + item, settings) for item in block["items"]]
     if kind == "calendar":
+        # Wide planners read as a week, not seven compressed spreadsheet rows.
+        # Measure every event first; dense/narrow planners retain the ruled agenda.
+        if width >= 400 and max_height and not settings.get("_compact_blocks"):
+            labels, cells = [], []
+            commands = [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LINEABOVE", (0, 0), (-1, 0), 0.75, colors.HexColor(settings["ink"])),
+                (
+                    "LINEBELOW",
+                    (0, 0),
+                    (-1, 0),
+                    0.5,
+                    colors.HexColor(settings["rule_color"]),
+                ),
+                (
+                    "LINEBELOW",
+                    (0, -1),
+                    (-1, -1),
+                    0.5,
+                    colors.HexColor(settings["rule_color"]),
+                ),
+                (
+                    "INNERGRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.25,
+                    colors.HexColor(settings["rule_color"]),
+                ),
+            ]
+            for i, d in enumerate(block["days"]):
+                today = d["date"] == day
+                label = date.fromisoformat(d["date"]).strftime("%a %d")
+                labels.append(
+                    paragraph(
+                        label + ("\nTODAY" if today else ""),
+                        settings,
+                        size=8,
+                        bold=True,
+                    )
+                )
+                cells.append(
+                    [
+                        paragraph(event, settings, size=settings["body_size"])
+                        for event in d["events"]
+                    ]
+                    or [paragraph("—", settings)]
+                )
+                if today:
+                    commands.append(
+                        ("BACKGROUND", (i, 0), (i, -1), colors.HexColor("#EAEAE6"))
+                    )
+                elif d["date"] < day:
+                    for p in [labels[-1], *cells[-1]]:
+                        p.style.textColor = colors.HexColor("#686868")
+            week = Table([labels, cells], colWidths=[width / 7] * 7, hAlign="LEFT")
+            week.setStyle(TableStyle(commands))
+            if week.wrap(width, A4[1])[1] <= max_height - 2:
+                # Give each day room to breathe, without changing its font size.
+                header_height = week._rowHeights[0]
+                body_height = max(
+                    week._rowHeights[1], min(max_height - header_height - 2, 105)
+                )
+                week = Table(
+                    [labels, cells],
+                    colWidths=[width / 7] * 7,
+                    rowHeights=[header_height, body_height],
+                    hAlign="LEFT",
+                )
+                week.setStyle(TableStyle(commands))
+                week._after_space = 0
+                return [week]
         header = Table(
             [
                 [
@@ -871,12 +1041,12 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
         )
         header._after_space = 0
         header._keep_with_next = True
+        header._calendar_agenda = True
         flows = [header]
         size = min(8 if settings.get("_compact_blocks") else 10, settings["body_size"])
         for d in block["days"]:
             label = date.fromisoformat(d["date"]).strftime("%a %d")
             label += " · TODAY" if d["date"] == day else ""
-            events = " · ".join(d["events"]) or "—"
             # Preserve the table in every fitting mode; never flatten to prose.
             label_p = paragraph(
                 label,
@@ -884,9 +1054,16 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
                 size=6 if settings.get("_compact_blocks") else 7,
                 bold=True,
             )
-            event_p = paragraph(events, settings, size=size)
+            events = (
+                [" · ".join(d["events"])]
+                if settings.get("_compact_blocks") and d["events"]
+                else d["events"]
+            )
+            event_ps = [paragraph(event, settings, size=size) for event in events] or [
+                paragraph("—", settings, size=size)
+            ]
             flow = Table(
-                [[label_p, event_p]],
+                [[label_p, event_ps]],
                 colWidths=[width * 0.23, width * 0.77],
                 hAlign="LEFT",
             )
@@ -931,11 +1108,11 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
                     )
                 )
             elif d["date"] < day:
-                label_p.style.textColor = event_p.style.textColor = colors.HexColor(
-                    "#777777"
-                )
+                for p in [label_p, *event_ps]:
+                    p.style.textColor = colors.HexColor("#777777")
             flow.setStyle(TableStyle(commands))
             flow._after_space = 0
+            flow._calendar_agenda = True
             flows.append(flow)
         if max_height and not settings.get("_compact_blocks"):
             measured = sum(f.wrap(width, A4[1])[1] for f in flows)
@@ -999,7 +1176,9 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
             raise ValueError(
                 "An illustration asset is missing. Regenerate the edition."
             )
-        caption = paragraph(block["caption"] + " · AI illustration", settings, size=7)
+        caption = paragraph(
+            block["caption"] + " · AI illustration", settings, size=7, align=1
+        )
         caption_height = caption.wrap(width, A4[1])[1]
         graphic = Image(BytesIO(base64.b64decode(image_data)))
         available = max(
@@ -1009,23 +1188,23 @@ def block_flowables(block, width, settings, day, image_data=None, max_height=Non
         scale = min(width / graphic.imageWidth, available / graphic.imageHeight)
         graphic.drawWidth = graphic.imageWidth * scale
         graphic.drawHeight = graphic.imageHeight * scale
+        graphic.hAlign = "CENTER"
         return [graphic, caption]
     raise ValueError("Unsupported content block: " + kind)
 
 
 def compose_regions(settings, issue):
-    """Try measured section-local fitting before requesting any paid text revision."""
+    """Fit with one shared typographic scale; never enlarge individual articles."""
     overrides = {}
     for stage in range(4):
         try:
             result = _compose_regions(settings, issue, overrides)
-            return _open_sparse_type(settings, issue, overrides, result)
+            return result
         except FitError as error:
             if stage == 3:
                 raise
             for section in settings["sections"]:
-                if section["name"] not in error.sections:
-                    continue
+                # Apply the same type scale to every section, not just overflow.
                 style = dict(
                     _compact_blocks=True,
                     padding_mm=min(settings["padding_mm"], 1.25),
@@ -1047,52 +1226,6 @@ def compose_regions(settings, issue):
                         _spacing=1,
                     )
                 overrides[section["id"]] = style
-
-
-def _open_sparse_type(settings, issue, overrides, result):
-    """Use modestly larger readable type in sparse articles, never extra filler."""
-    regions, placements = result
-    sparse = []
-    for section in issue["sections"]:
-        sid = section["id"]
-        own = [r for r in regions if r.section_id == sid]
-        if (
-            sid in overrides
-            or len(own) != 1
-            or any(
-                b["type"] not in ("paragraph", "heading", "list")
-                for b in section["blocks"]
-            )
-        ):
-            continue
-        r = own[0]
-        bottom = min(y for region, _, _, y, _ in placements if region == r)
-        coverage = (r.y + r.height - bottom) / r.height
-        if coverage < 0.85 and settings["body_size"] < 10.5:
-            sparse.append(sid)
-    if not sparse:
-        return result
-    for increment in (0.5, 1, 1.5):
-        trial = deepcopy(overrides)
-        for sid in sparse:
-            trial[sid] = {
-                "body_size": min(10.5, settings["body_size"] + increment),
-                "headline_size": min(24, settings["headline_size"] + increment * 2),
-            }
-        try:
-            candidate = _compose_regions(settings, issue, trial)
-        except FitError:
-            break
-        result = candidate
-        for sid in list(sparse):
-            r = next(r for r in result[0] if r.section_id == sid)
-            bottom = min(y for region, _, _, y, _ in result[1] if region == r)
-            if (r.y + r.height - bottom) / r.height >= 0.85:
-                overrides[sid] = trial[sid]
-                sparse.remove(sid)
-        if not sparse:
-            break
-    return result
 
 
 def _compose_regions(settings, issue, overrides):
@@ -1192,7 +1325,11 @@ def _compose_regions(settings, issue, overrides):
                     f = block_flowables(
                         block,
                         width,
-                        settings,
+                        (
+                            {**settings, "_compact_blocks": True}
+                            if getattr(f, "_calendar_agenda", False)
+                            else settings
+                        ),
                         issue["day"],
                         issue.get("images", {}).get(f"{sid}:{index}"),
                         max_height=y - bottom,
@@ -1232,7 +1369,8 @@ def _compose_regions(settings, issue, overrides):
                 else:
                     pending.appendleft(("flow", (f, link)))
                 break
-            placements.append((r, f, x, y - height, link))
+            draw_x = x + (width - measured_width) / 2 if isinstance(f, Image) else x
+            placements.append((r, f, draw_x, y - height, link))
             y -= height + after_space
 
     for sid in configured_ids:

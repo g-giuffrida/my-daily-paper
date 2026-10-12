@@ -277,6 +277,14 @@ class FakeResponse:
         ]
         data = json.loads(result.output_text)
         data["sections"] = {k: v for k, v in data["sections"].items() if k in ids}
+        for sid, section in data["sections"].items():
+            if "visual" in ids[sid]["properties"]:
+                section["visual"] = {
+                    "type": "diagram",
+                    "title": "Illustrative process",
+                    "steps": ["Observe", "Explain"],
+                    "caption": "Test fixture",
+                }
         result.output_text = json.dumps(data)
         return result
 

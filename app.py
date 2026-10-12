@@ -25,7 +25,7 @@ from settings import (
 )
 
 ROOT = Path(__file__).resolve().parent
-BUILD_VERSION = "2026.10.11-newspaper-layout-3"
+BUILD_VERSION = "2026.10.12-press-4"
 storage = components.declare_component(
     "paper_storage", path=str(ROOT / "components" / "storage")
 )
@@ -386,8 +386,8 @@ with left:
         use_container_width=True,
     )
     st.caption(
-        "Sections auto-fit: calendars and graphics can use the full section width; "
-        "spacing and type tighten only where needed. Printing uses your normal system dialog."
+        "Articles share one font scale across the edition. Calendars and graphics use their assigned space. "
+        "Print opens the original two-page PDF: use its printer icon and select two-sided, long-edge printing."
     )
 
 if generate or sample:
